@@ -1,0 +1,2 @@
+#fast numpy copying
+https://stackoverflow.com/questions/6431973/how-to-copy-data-from-a-numpy-array-to-another
