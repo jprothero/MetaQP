@@ -34,8 +34,6 @@ LR = .1
 
 WEIGHT_DECAY = 0.0001
 
-
-N_way = 8
 CH = 3
 R = 6
 C = 7

@@ -35,7 +35,9 @@ class MetaNet(nn.Module):
         
         return nn.Sequential(*layers)
     
-    def forward(self, state, policy, weighted=False):
+    def forward(self, state, percent_random=None):
+        if percent_random is not None:
+            
         orig_policy = policy
 
         x = self.res1(state)

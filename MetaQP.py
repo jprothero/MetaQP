@@ -138,7 +138,8 @@ class MetaQP:
         return var
 
     def create_task_tensor(self, state):
-        #a task is going to 
+        #a task is going to be from the perspective of a certain player
+        #so we want to 
 
         #np.array to make a fast copy
         state = np.array(np.expand_dims(state, 0))
@@ -147,23 +148,46 @@ class MetaQP:
 
         return n_way_state_tensor
 
+    #so we can have it where the training net always goes first, then the best net
+    #always goes second. we randomly choose the starting player for the input states,
+    #and the new and best nets should get an even number of games for player 1 / 2
     def meta_self_play(self, state):
+        #fast copy it
+        state = np.array(state)
         self.qp.eval()
         self.best_qp.eval()
         tasks = []
+        batch_task_tensor = torch.zeros(config.EPISODE_BATCH_SIZE, 
+            config.CH, config.R, config.C)
 
         for i in range(config.EPISODE_BATCH_SIZE//config.N_WAY):
+            #starting player chosen randomly
+            starting_player = np.random.choice(1)
+            state[2] = starting_player
+            task_tensor = self.create_task_tensor(state)
+            batch_task_tensor[i*config.N_WAY] = task_tensor
+
             task = {
-                "state": self.create_task_tensor(state)
+                "state": task_tensor
+                , "starting_player": starting_player
                 , "memories": []
             }
 
-        random_policies = np.zeros(shape=config.BATCHED_SHAPE, dtype="float32")
+        batch_task_variable = Variable(batch_task_tensor)
+
+        qs, policies = self.qp(batch_task_variable, percent_random=.2)
+
+        #scales from -1 to 1 to 0 to 1
+        scaled_qs = (qs + 1) / 2
+        
+        weighted_policies *= scaled_qs
+
+        corrected_policies = self.correct_policies(weighted_policies)
+
         states = np.zeros(shape=config.BATCHED_SHAPE, dtype="float32")
         for i in range(config.BATCH_SIZE):
             random_policies[i] = np.random.dirichlet(
                 [config.ALPHA] * len(self.actions))
-            random_policies[i] = self.correct_policy(random_policies[i])
 
             memory[i]["rand_pol"] = np.copy(random_policies[i])
             memory[i]["state"] = np.copy(state)
