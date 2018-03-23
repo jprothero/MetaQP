@@ -109,7 +109,7 @@ class QP(nn.Module):
 
         if policy is None:
             policy = self.P(state_out, percent_random)
-
+            
         policy_view = policy.view(1, config.BATCH_SIZE, config.R, config.C)
         state_out = state_out.permute(1, 0, 2, 3)
 

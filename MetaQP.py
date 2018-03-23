@@ -47,13 +47,14 @@ class MetaQP:
             self.history = utils.load_history()
             self.memories = utils.load_memories()
 
-    def correct_policy(self, policy, state):
-        legal_actions = self.get_legal_actions(state[:2])
+    def correct_policy(self, policy, state, mask=True):
+        if mask:
+            legal_actions = self.get_legal_actions(state[:2])
 
-        mask = np.zeros((len(self.actions),))
-        mask[legal_actions] = 1
+            mask = np.zeros((len(self.actions),))
+            mask[legal_actions] = 1
 
-        policy = policy * mask
+            policy = policy * mask
 
         pol_sum = (np.sum(policy * 1.0))
 
@@ -87,13 +88,13 @@ class MetaQP:
             var = var.cuda()
         return var
 
-    def update_task_memories(self, tasks, corrected_final_policies, improved_task_policies):
-        for i, task in enumerate(tasks):
-            task["improved_policy"] = improved_task_policies[i]
-            for policy in corrected_final_policies[i:i + config.N_WAY]:
-                task["memories"].extend([{"policy": policy}])
+    # def update_task_memories(self, tasks, corrected_final_policies, improved_task_policies):
+    #     for i, task in enumerate(tasks):
+    #         task["improved_policy"] = improved_task_policies[i]
+    #         for policy in corrected_final_policies[i:i + config.N_WAY]:
+    #             task["memories"].extend([{"policy": policy}])
 
-        return tasks
+    #     return tasks
 
     # so what are the targets going to be
     # the Q will get a set of states and policies (maybe a mix of the initial policy, and
@@ -110,13 +111,13 @@ class MetaQP:
     # so let me think about this some more, all I really need are states, some slightly
     # different policies, and the results.
 
-    def mix_task_policies(self, improved_task_policies, policies, perc_improved=0):
-        for i, improved_policy in enumerate(improved_task_policies):
-            for policy in policies[i:i + config.N_WAY]:
-                policy = policy * (1 - perc_improved) + \
-                    improved_policy * perc_improved
+    # def mix_task_policies(self, improved_task_policies, policies, perc_improved=0):
+    #     for i, improved_policy in enumerate(improved_task_policies):
+    #         for policy in policies[i:i + config.N_WAY]:
+    #             policy = policy * (1 - perc_improved) + \
+    #                 improved_policy * perc_improved
 
-        return policies
+    #     return policies
 
     def transition_batch_task_tensor(self, batch_task_tensor,
                                      corrected_final_policies, is_done):
@@ -140,6 +141,7 @@ class MetaQP:
                 if not is_done[idx]:
                     state = batch_task_tensor[idx]
                     legal_actions = self.get_legal_actions(state[:2])
+                    # I think draws are bugged, need to inspect
                     if len(legal_actions) == 0:
                         is_done[idx] = True
                         num_done += 1
@@ -208,12 +210,45 @@ class MetaQP:
         # qs = qs.detach().numpy()
         policies = policies.detach().numpy()
 
+        policies = self.correct_policies(policies, batch_task_tensor)
+
+        policies_input = self.wrap_to_variable(policies)
+
+        qs, _ = qp(batch_task_variable, policies_input)
+
+        qs = qs.detach().numpy()
+
+        scaled_qs = (qs + 1) / 2
+        weighted_policies = policies * scaled_qs
+
+        idx = 0
+        for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
+            summed_policy = 0
+            for j in range(config.N_WAY):
+                summed_policy += weighted_policies[idx]
+                idx += 1
+            idx -= config.N_WAY
+
+            corrected_policy = self.correct_policy(
+                summed_policy, batch_task_tensor[idx], mask=True)
+
+            for j in range(config.N_WAY):
+                weighted_policies[idx] = corrected_policy
+                tasks[i]["memories"].extend([{"policy": corrected_policy}])
+                idx += 1
+
+        corrected_policies = weighted_policies
+
+        # The goal is average over the 5 semi random policies weighted by the Q's
+        # so at first we make a new uncorrected policy, then we pass it through the net
+        # just for the Q value
+
         # scales from -1 to 1 to 0 to 1
         # scaled_qs = (qs + 1) / 2
         # weighted_policies = policies * scaled_qs
 
-        improved_task_policies = self.get_improved_task_policies_list(
-            weighted_policies)
+        # improved_task_policies = self.get_improved_task_policies_list(
+        #     weighted_policies)
 
         #***Idea***
         # since the initial policy will be for the first state, we could average
@@ -229,16 +264,16 @@ class MetaQP:
         # diversity in the policies that the Q sees, which is kind of bad.
         # but then again, we will get more of a true Q value for that policy.
         # we can try it out for now. ill set to .8 so some difference happens
-        final_policies = self.mix_task_policies(improved_task_policies,
-                                                policies, perc_improved=1)
+        # final_policies = self.mix_task_policies(improved_task_policies,
+        #                                         policies, perc_improved=1)
 
-        corrected_final_policies = self.correct_policies(
-            final_policies, batch_task_tensor)
+        # corrected_final_policies = self.correct_policies(
+        #     final_policies, batch_task_tensor)
 
-        qs, _ = qp(batch_task_variable, corrected_final_policies)
+        # qs, _ = qp(batch_task_variable, corrected_final_policies)
 
-        tasks = self.update_task_memories(
-            tasks, corrected_final_policies, improved_task_policies)
+        # tasks = self.update_task_memories(
+        #     tasks, corrected_final_policies, improved_task_policies)
 
         is_done = []
         for _ in range(config.EPISODE_BATCH_SIZE):
@@ -262,7 +297,7 @@ class MetaQP:
 
         while num_done < config.EPISODE_BATCH_SIZE:
             batch_task_tensor = self.transition_batch_task_tensor(np.array(batch_task_tensor),
-                                                                  corrected_final_policies, is_done)
+                                                                  corrected_policies, is_done)
 
             is_done, tasks, results, num_done = self.check_finished_games(batch_task_tensor, is_done,
                                                                           tasks, num_done, results, best_turn)
@@ -309,7 +344,7 @@ class MetaQP:
                 config.MIN_TASK_MEMORIES, len(self.memories)))
             return
 
-        for _ in range(config.TRAINING_LOOPS):
+        for _ in tqdm(range(config.TRAINING_LOOPS)):
             tasks = sample(self.memories, config.SAMPLE_SIZE)
 
             BATCH_SIZE = config.TRAINING_BATCH_SIZE // config.N_WAY
@@ -324,7 +359,7 @@ class MetaQP:
 
     def train_tasks(self, minibatches_of_tasks):
         batch_task_tensor = np.zeros((config.TRAINING_BATCH_SIZE,
-                                     config.CH, config.R, config.C))
+                                      config.CH, config.R, config.C))
 
         result_tensor = np.zeros((config.TRAINING_BATCH_SIZE, 1))
 
@@ -340,16 +375,9 @@ class MetaQP:
             Q_loss = 0
             policy_loss = 0
 
-            improved_policies_variable = self.wrap_to_variable(
-            np.zeros((config.TRAINING_BATCH_SIZE//config.N_WAY, config.R * config.C)))
-
-            policy_view = []
-
             idx = 0
             for i, task in enumerate(mb):
                 state = task["state"]
-                improved_policies_variable[i] = self.wrap_to_variable(task["improved_policy"])
-                policy_view.extend([i])
 
                 for memory in task["memories"]:
                     result_tensor[idx] = memory["result"]
@@ -359,10 +387,10 @@ class MetaQP:
                     idx += 1
 
             state_input = self.wrap_to_variable(batch_task_tensor)
-            policies_input = self.wrap_to_variable(policies_tensor)
+            corrected_policies_input = self.wrap_to_variable(policies_tensor)
             result_target = self.wrap_to_variable(result_tensor)
 
-            Qs, _ = self.qp(state_input, policies_input)
+            Qs, _ = self.qp(state_input, corrected_policies_input)
 
             Q_loss += F.mse_loss(Qs, result_target)
 
@@ -375,12 +403,18 @@ class MetaQP:
 
             Qs, policies = self.qp(state_input)
 
-            optimal_value_var = self.wrap_to_variable(optimal_value_tensor)
-            policy_loss += F.mse_loss(Qs, optimal_value_var)
-            set_trace()
-            policy_loss += torch.mm(improved_policies_variable.t(), torch.log(policies[policy_view]))
+            for correct_policy, policy in zip(corrected_policies_input, policies):
+                correct_policy = correct_policy.unsqueeze(0)
+                policy = policy.unsqueeze(-1)
+                policy_loss += -torch.mm(correct_policy,
+                                         torch.log(policy)).squeeze()
+
+            optimal_value_var = self.wrap_to_variable(optimal_value_tensor)            
+
+            for _ in range(config.TRAINING_BATCH_SIZE):
+                Qs, policies = self.qp(state_input)
+                policy_loss += F.mse_loss(Qs, optimal_value_var)
 
             policy_loss.backward()
-            set_trace()
 
             self.p_optim.step()
