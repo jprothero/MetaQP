@@ -44,72 +44,6 @@ class MetaQP:
 
             self.best_qp = load_model()
 
-    def self_play(self, root_state):
-        results = {
-            "new": 0, "best": 0, "draw": 0
-        }
-        self.qp.eval()
-        self.best_qp.eval()
-
-        for _ in tqdm(range(config.EPISODES)):
-            state = np.copy(root_state)
-            # game_over = False
-            # turn = 0
-            # episode_memories = []
-            # legal_actions = self.get_legal_actions(state[:2])
-
-            while not game_over:
-                curr_player = turn % 2
-                turn += 1
-                if curr_player != best_player:
-                    state, memory = self.select_action(
-                            state, turn, legal_actions, curr_player)
-                else:
-                    state, memory = self.best_mcts.select_action(
-                        state, turn, legal_actions, curr_player)
-                else:
-
-                legal_actions = self.get_legal_actions(state[:2])
-
-                reward, game_over = self.calculate_reward(state[:2])
-                episode_memories.extend([memory])
-
-                if len(legal_actions) == 0:
-                    game_over = True
-                    results["draw"] += 1
-                elif game_over:
-                    if best_player == curr_player:
-                        results["best"] += 1
-                    else:
-                        results["new"] += 1
-
-            for memory in episode_memories:
-                if memory["curr_player"] == curr_player:
-                    memory["result"] = -1 * reward
-                else:
-                    memory["result"] = reward
-            memories.extend(episode_memories)
-
-        print("Results: ", results)
-        if results["new"] > results["best"] * config.SCORING_THRESHOLD:
-            self.save_best_model()
-            print("Loading new best_mcts")
-            self.best_mcts.mcts = self.load_model("best")
-            if self.cuda:
-                self.best_mcts.mcts = self.best_mcts.mcts.cuda()
-        elif results["best"] > results["new"] * config.SCORING_THRESHOLD:
-            print("Reverting to previous best")
-            self.mcts = self.load_model("best")
-            if self.cuda:
-                self.mcts = self.mcts.cuda()
-            self.optim = optim.SGD(self.mcts.parameters(),
-                                    lr=config.LR,
-                                    weight_decay=config.WEIGHT_DECAY,
-                                    momentum=config.MOMENTUM)
-        return memories
-
-    # def select_action(self, state, turn, legal_actions, curr_player):
-
     def correct_policy(self, policy, state):
         legal_actions = self.get_legal_actions(state[:2])
 
@@ -127,7 +61,7 @@ class MetaQP:
 
         return policy
 
-    def correct_policies(self, policies, state)
+    def correct_policies(self, policies, state):
         for policy in policies:
             policy = self.correct_policy(policy)
         return policies
@@ -346,16 +280,16 @@ class MetaQP:
             tasks = sample(self.memories, config.SAMPLE_SIZE)
 
             BATCH_SIZE = config.TRAINING_BATCH_SIZE//config.N_WAY
-            extra = config.SAMPLE_SIZE - config.SAMPLE_SIZE%BATCH_SIZE)
+            extra = config.SAMPLE_SIZE - config.SAMPLE_SIZE%BATCH_SIZE
             minibatches = [
                 tasks[x:x + BATCH_SIZE]
-                for x in range(0, len(tasks)-extra, 
+                for x in range(0, len(tasks)-extra, BATCH_SIZE)
             ]
             self.train_tasks(minibatches)
 
         # self.train_minibatches(minibatches)
 
-    def train_tasks(self, minibatches_of_tasks):BATCH_SIZE
+    def train_tasks(self, minibatches_of_tasks):
         batch_task_tensor = torch.zeros(config.TRAINING_BATCH_SIZE,
             config.CH, config.R, config.C)
 
@@ -400,7 +334,7 @@ class MetaQP:
             optimal_value_var = Variable(optimal_value_tensor)
             policy_loss += F.mse_loss(Qs, optimal_value_var)
             policy_loss += torch.mm(improved_policies_variable.t(), 
-                torch.log(policies[policy_view])])
+                torch.log(policies[policy_view]))
 
             self.p_optim.step()
 
