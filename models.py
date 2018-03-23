@@ -72,31 +72,36 @@ class MetaNet(nn.Module):
         batch_size = state.shape[0].data.numpy()[0]
 
         x = self.state_res_blocks[0](state)
-        for res in self.state_res_blocks[:1]:
+        for res in self.state_res_blocks[1:]:
             x = res(x)
 
-        x = self.q_res_blocks[0](x)
-
-
         if policy is None:
-            policy = self.policy(x)
+            policy = self.p_res_blocks[0](x)
+            for res in self.p_res_blocks[1:-1]:
+                policy = res(policy)
+
+            policy = self.p_res_blocks[-1](policy)
+
+            if percent_random is not None:
+                set_trace()
+                noise = np.random.dirichlet([1] * 42, size=(batch_size))
+                policy = policy * (1 - percent_random) + noise * percent_random
+
+        policy_view = policy.view(batch_size, 1, config.R, config.C)
+
+        Q_input = torch.cat((x, policy_view), axis=1)
+
+        Q = self.q_res_blocks[0](Q_input)
+        for res in self.q_res_blocks[1:-1]:
+            Q = res(Q)
+
+        Q = self.q_res_blocks[-1](Q)
 
         # might need this view
         # policy_view = policy.view(1, config.BATCH_SIZE, config.R, config.C)
         # Q_input = torch.cat((x.view(self.num_filters, config.BATCH_SIZE, config.R, config.C),
         #     policy_view), axis=0)
         # Q = self.Q(Q_input.view(config.BATCH_SIZE, -1))
-
-        policy_view = policy.view(batch_size, 1, config.R, config.C)
-
-        Q_input = torch.cat((x, policy_view), axis=1)
-
-        Q = self.Q(Q_input)
-
-        if percent_random is not None:
-            set_trace()
-            noise = np.random.dirichlet([1] * 42, size=(batch_size))
-            policy = policy * (1 - percent_random) + noise * percent_random
 
         return Q, policy
 
