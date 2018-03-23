@@ -19,8 +19,8 @@ metaqp = MetaQP(actions=actions, calculate_reward=calculate_reward,
     get_legal_actions=get_legal_actions, transition=transition)
 
 while True:
-    metaqp.meta_self_play(root_state)
     metaqp.train_memories()
+    metaqp.meta_self_play(root_state)
 
     iteration += 1
     print("Iteration Number "+str(iteration))

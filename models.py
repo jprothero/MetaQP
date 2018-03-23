@@ -193,13 +193,15 @@ class PolicyHead(nn.Module):
         self.conv1 = nn.Conv2d(in_dims, config.POLICY_HEAD_FILTERS, kernel_size=1, stride=1)
         self.bn1 = nn.BatchNorm1d(config.POLICY_HEAD_FILTERS)
 
-        self.policy = nn.Linear(config.POLICY_HEAD_FILTERS*config.R*config.C, out_dims)
+        self.lin = nn.Linear(config.POLICY_HEAD_FILTERS*config.R*config.C, out_dims)
 
     def forward(self, x):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
 
-        policy = self.policy(x.view(config.BATCH_SIZE, -1))
+        logits = self.lin(x.view(config.BATCH_SIZE, -1))
+
+        policy = F.softmax(logits, dim=1)
 
         return policy

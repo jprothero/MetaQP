@@ -78,54 +78,16 @@ class Connect4:
         
         for k in range(board.shape[1]):
             match = cv2m(self.legal_move_pattern.astype(self.datatype), 
-                     board[:, k].astype(self.datatype), cv2.TM_SQDIFF);
+                     board[:, k].astype(self.datatype), cv2.TM_SQDIFF)
             
             i, j = np.where(match==0)
             
             if len(i) != 0:
                 legal_moves.append(np.max(i)*board.shape[1] + k)
-                
-#         print(board)
-#         if len(board.shape) > 2:
-#         print(board)
-#         print(legal_moves)
-#         set_trace()
-#         pass
+
         return legal_moves
-
-    def test_valid(self, state):
-        board = state[0] + state[1]
-        
-        for k in range(board.shape[1]):
-            match = cv2m(self.valid_pattern2.astype(self.datatype), 
-                     board[:, k].astype(self.datatype), cv2.TM_SQDIFF)
-            
-            i, j = np.where(match==0)
-
-            if len(i) > 0:
-                return -1
-
-            match = cv2m(self.valid_pattern.astype(self.datatype), 
-                     board[:, k].astype(self.datatype), cv2.TM_SQDIFF)
-            
-            i, j = np.where(match==0)
-            
-            #so I'm trying to make sure that there are no holes
-            #i.e. we want t
-            if len(i) > 0:
-                return -1
-            
-        return 1     
-#         print(board)
-#         if len(board.shape) > 2:
-#         print(board)
-#         print(legal_moves)
-#         set_trace()
-#         pass
     
-    def transition(self, state, action, debug=False):
-        if debug:
-            set_trace()
+    def transition(self, state, action):
         idx = action
         
         i, j = np.unravel_index([idx], state.shape)
