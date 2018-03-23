@@ -202,14 +202,19 @@ class MetaQP:
         for j in range(config.EPISODE_BATCH_SIZE//config.N_WAY):
             for i, state in enumerate(batch_task_tensor[j:j+config.N_WAY]):
                 if not is_done[idx]:
-                    reward, game_over = self.calculate_reward(state[:2])
-
-                    if game_over:
+                    legal_actions = self.get_legal_actions(state[:2])
+                    if len(legal_actions) == 0:
                         is_done[idx] = True
-                        curr_player = state[2][0]
-                        if tasks[j]["starting_player"] != curr_player:
-                            reward *= -1
                         tasks[j][idx]["result"] = reward
+                    else:
+                        reward, game_over = self.calculate_reward(state[:2])
+                        
+                        if game_over:
+                            is_done[idx] = True
+                            curr_player = state[2][0]
+                            if tasks[j]["starting_player"] != curr_player:
+                                reward *= -1
+                            tasks[j][idx]["result"] = reward
 
                 idx += 1
 
@@ -237,7 +242,14 @@ class MetaQP:
 
         batch_task_variable = Variable(batch_task_tensor)
 
-        qs, policies = self.qp(batch_task_variable, percent_random=.2)
+        best_start = np.random.choice(1)
+
+        if best_start == 1:
+            qp = self.best_qp
+        else:
+            qp = self.qp
+
+        qs, policies = qp(batch_task_variable, percent_random=.2)
 
         # scales from -1 to 1 to 0 to 1
         scaled_qs = (qs + 1) / 2
@@ -263,18 +275,45 @@ class MetaQP:
         for i in range(config.EPISODE_BATCH_SIZE):
             is_done.extend([False])
 
+
+        #sooo let me think. the new_net and best_net will continually trade off batch
+        #evaluations. basically the new_net chooses some initial_moves, and 
+        #then it alternates until all the games are done. #this will bias that the new
+        #net always makes the first move, which can be significant
+        #so now it's random start. so the opposing moves for each turn will be chosen
+        #by the opposite net
         num_done = 0
+        if best_start == 1:
+            best_turn = 0
+        else:
+            best_turn = 1
+
+        results = {
+            "new": 0
+            , "best": 0
+            , "draw": 0
+        }
+
         while num_done < config.EPISODE_BATCH_SIZE:
             batch_task_tensor = self.transition_batch_task_tensor(batch_task_tensor, 
                 corrected_final_policies, is_done)
 
-            is_done, tasks = self.check_finished_games(batch_task_tensor, is_done, tasks) 
+            is_done, tasks, results = self.check_finished_games(batch_task_tensor, is_done, tasks) 
 
             batch_task_variable = Variable(batch_task_tensor)
 
+            if best_turn == 1:
+                qp = self.best_qp
+            else:
+                qp = self.qp
+
             _, policies = self.qp(batch_task_variable)
 
-        return memory
+            policies = self.correct_policies(policies)
+
+        self.memories.extend(tasks)
+
+        return tasks, results
 
     def train_memories(self, memories):
         self.meta_net.train()
