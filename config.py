@@ -17,7 +17,7 @@ MAX_TASK_MEMORIES = 30000//N_WAY
 
 # Optimizer #
 LR = .1
-OPTIM = "Adam"
+OPTIM = "adam"
 MOMENTUM = .9
 WEIGHT_DECAY = 0.0001
 

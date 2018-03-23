@@ -12,7 +12,7 @@ calculate_reward = connect4.calculate_reward
 get_legal_actions = connect4.get_legal_actions
 transition = connect4.transition
 
-root_state = torch.zeros(shape=(3, 6, 7), dtype="float32")
+root_state = np.zeros(shape=(3, 6, 7), dtype="float32")
 iteration = 0
 
 metaqp = MetaQP(actions=actions, calculate_reward=calculate_reward,

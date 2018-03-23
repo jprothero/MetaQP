@@ -4,20 +4,30 @@ import torch
 from models import QP
 import config
 
+def setup_optims(qp):
+    if config.OPTIM.lower() == "adam":
+        q_optim = optim.Adam(qp.parameters(),
+                            lr=config.LR,
+                            weight_decay=config.WEIGHT_DECAY)
 
-def setup_optims(self):
-    q_optim = optim.Adam(self.qp.q.parameters(),
-                         lr=config.LR,
-                         weight_decay=config.WEIGHT_DECAY)
+        p_optim = optim.Adam(qp.parameters(),
+                            lr=config.LR,
+                            weight_decay=config.WEIGHT_DECAY)
+    else:
+        q_optim = optim.SGD(qp.parameters(),
+                            lr=config.LR,
+                            momentum=config.MOMENTUM,                            
+                            weight_decay=config.WEIGHT_DECAY)
 
-    p_optim = optim.Adam(self.qp.p.parameters(),
-                         lr=config.LR,
-                         weight_decay=config.WEIGHT_DECAY)
+        p_optim = optim.SGD(qp.parameters(),
+                            lr=config.LR,
+                            momentum=config.MOMENTUM,
+                            weight_decay=config.WEIGHT_DECAY)
 
     return q_optim, p_optim
 
 
-def load_model(self, name="qp"):
+def load_model(name="qp"):
     try:
         return torch.load('checkpoints/models/%s_best.t7' % name)
     except:
@@ -25,6 +35,6 @@ def load_model(self, name="qp"):
         return QP()
 
 
-def save_model(self, name="qp"):
+def save_model(qp, name="qp"):
     print("Saving best model")
-    torch.save(self.mcts, "checkpoints/models/%s_best.t7" % name)
+    torch.save(qp, "checkpoints/models/%s_best.t7" % name)
