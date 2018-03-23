@@ -197,7 +197,7 @@ class MetaQP:
 
         return batch_task_tensor
 
-    def check_finished_games(self, batch_task_tensor, is_done, tasks):
+    def check_finished_games(self, batch_task_tensor, is_done, tasks, num_done):
         idx = 0
         for j in range(config.EPISODE_BATCH_SIZE//config.N_WAY):
             for i, state in enumerate(batch_task_tensor[j:j+config.N_WAY]):
@@ -205,6 +205,7 @@ class MetaQP:
                     legal_actions = self.get_legal_actions(state[:2])
                     if len(legal_actions) == 0:
                         is_done[idx] = True
+                        num_done += 1
                         tasks[j][idx]["result"] = reward
                     else:
                         reward, game_over = self.calculate_reward(state[:2])
@@ -214,11 +215,12 @@ class MetaQP:
                             curr_player = state[2][0]
                             if tasks[j]["starting_player"] != curr_player:
                                 reward *= -1
-                            tasks[j][idx]["result"] = reward
+                            tasks[j]["memories"][idx]["result"] = reward
+                            num_done += 1
 
                 idx += 1
 
-        return is_done, tasks
+        return is_done, tasks, num_done
 
     def meta_self_play(self, state):
         # fast copy it
@@ -298,7 +300,8 @@ class MetaQP:
             batch_task_tensor = self.transition_batch_task_tensor(batch_task_tensor, 
                 corrected_final_policies, is_done)
 
-            is_done, tasks, results = self.check_finished_games(batch_task_tensor, is_done, tasks) 
+            is_done, tasks, results, num_done = self.check_finished_games(batch_task_tensor, is_done, 
+                tasks, num_done) 
 
             batch_task_variable = Variable(batch_task_tensor)
 
@@ -312,69 +315,94 @@ class MetaQP:
             policies = self.correct_policies(policies)
 
         self.memories.extend(tasks)
+        if len(self.memories) > config.MAX_TASK_MEMORIES:
+            self.memories[-config.MAX_TASK_MEMORIES:]
+        utils.save_memories()
 
-        return tasks, results
+        print("Results: ", results)
+        if results["new"] > results["best"] * config.SCORING_THRESHOLD:
+            model_utils.save_model()
+            print("Loading new best model")
+            self.best_qp = model_utils.load_model()
+            if self.cuda:
+                self.best_qp = self.best_qp.cuda()
+        elif results["best"] > results["new"] * config.SCORING_THRESHOLD:
+            print("Reverting to previous best")
+            self.qp = model_utils.load_model()
+            if self.cuda:
+                self.qp = self.qp.cuda()
+            self.q_optim, self.p_optim = model_utils.setup_optims()
 
-    def train_memories(self, memories):
-        self.meta_net.train()
+    def train_memories(self):
+        self.qp.train()
 
         # so memories are a list of lists containing memories
-        if len(memories) < config.NUM_TASKS:
+        if len(self.memories) < config.MIN_TASK_MEMORIES:
             print("Need {} tasks, have {}".format(
-                config.NUM_TASKS, len(memories)))
+                config.MIN_TASK_MEMORIES, len(self.memories)))
             return
 
         for _ in range(config.TRAINING_LOOPS):
-            tasks = sample(memories, config.NUM_TASKS)
-            self.train_tasks(tasks)
+            tasks = sample(self.memories, config.SAMPLE_SIZE)
 
-            # config.SAMPLE_SIZE - config.SAMPLE_SIZE%config.BATCH_SIZE)
-        # minibatches = [
-        #     data[x:x + config.BATCH_SIZE]
-        #     for x in range(0, len(data), config.BATCH_SIZE)
-        # ]
+            BATCH_SIZE = config.TRAINING_BATCH_SIZE//config.N_WAY
+            extra = config.SAMPLE_SIZE - config.SAMPLE_SIZE%BATCH_SIZE)
+            minibatches = [
+                tasks[x:x + BATCH_SIZE]
+                for x in range(0, len(tasks)-extra, 
+            ]
+            self.train_tasks(minibatches)
 
         # self.train_minibatches(minibatches)
 
-    def train_tasks(self, tasks):
-        # for training we want to sample a set of examples from a task(a state)
-        # i.e. from 128 samples of one state, sample 8 and do 8-way learning
+    def train_tasks(self, minibatches_of_tasks):BATCH_SIZE
+        batch_task_tensor = torch.zeros(config.TRAINING_BATCH_SIZE,
+            config.CH, config.R, config.C)
 
-        Q_loss = 0
-        inferred_loss = 0
-        optimal_loss = 0
+        result_tensor = torch.zeros(config.TRAINING_BATCH_SIZE, 1)
 
-        for task in tasks:
-            states = np.zeros(
-                shape=(config.N_way, config.CH, config.R, config.C))
-            random_policies = np.zeros(
-                shape=(config.N_way, config.R * config.C))
-            results = np.zeros(shape=(config.N_way))
-            improved_policies = np.zeros(
-                shape=(config.N_way, config.R * config.C))
+        policies_tensor = torch.zeros(config.TRAINING_BATCH_SIZE, config.R*config.C)
 
-            results = []
-            for i, memory in enumerate(task):
-                states[i] = memory["state"]
-                random_policies[i] = memory["rand_pol"]
-                results[i] = memory["result"]
-                improved_policies[i] = memory["improved_policy"]
+        improved_policies_variable = Variable(torch.zeros(config.N_WAY, config.R*config.C))
 
-            states = self.wrap_to_variable(states, volatile=True)
-            random_policies = self.wrap_to_variable(
-                random_policies, volatile=True)
-            results = self.wrap_to_variable(results, volatile=True)
-            improved_policies = self.wrap_to_variable(
-                improved_policies, volatile=True)
+        optimal_value_tensor = torch.ones(config.TRAINING_BATCH_SIZE, 1)
 
-            Qs, _, inferred_policies, optimal_policies = \
-                self.meta_net(states, random_policies, weighted=False)
+        for mb in minibatches_of_tasks:
+            self.q_optim.zero_grad()
+            self.p_optim.zero_grad()
 
-            Q_loss += F.mse_loss(Qs, results)
-            inferred_loss += torch.mm(inferred_policies.t(),
-                                      torch.log(random_policies))
-            optimal_loss += torch.mm(improved_policies[0].t(),
-                                     torch.log(optimal_policies[0]))
+            Q_loss = 0
+            policy_loss = 0
 
-        total_loss = Q_loss + inferred_loss + optimal_loss
-        total_loss.backward()
+            idx = 0
+            for i, task in enumerate(mb):
+                state = task["state"]
+                improved_policies_tensor[i] = task["improved_policy"]
+                policy_view.extend([i])
+
+                for memory in task["memory"]:
+                    result = memory["result"]
+
+                    policies_tensor[idx] = memory["policy"]
+                    batch_task_tensor[idx] = state
+                    idx += 1
+
+            state_input = Variable(batch_task_tensor)
+            policies_input = Variable(policies_tensor)
+            Qs, _ = self.qp(state_input, policies_input)
+
+            Q_loss += F.mse_loss(Qs, result)
+
+            self.q_optim.step()
+
+            Qs, policies = self.qp(state_input)
+
+            optimal_value_var = Variable(optimal_value_tensor)
+            policy_loss += F.mse_loss(Qs, optimal_value_var)
+            policy_loss += torch.mm(improved_policies_variable.t(), 
+                torch.log(policies[policy_view])])
+
+            self.p_optim.step()
+
+            total_loss = Q_loss + policy_loss
+            total_loss.backward()

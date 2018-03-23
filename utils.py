@@ -12,6 +12,12 @@ def create_folders():
         os.makedirs('checkpoints/' + 'models')
 
 
+def save_history(history):
+    print("Saving history...")
+    pickle.dump(history,
+                open("checkpoints/history.p", "wb"))
+
+
 def load_history():
     print("Loading History...")
     try:
@@ -38,3 +44,9 @@ def load_memories():
         memories = []
 
     return memories
+
+
+def save_memories(memories):
+    print("Saving memories...")
+    pickle.dump(memories,
+                open("checkpoints/memories.p", "wb"))
