@@ -86,6 +86,9 @@ class PolicyModule(nn.Module):
         policy_out = self.p_res_out(p)
 
         if percent_random is not None:
+            #so the other idea was learning a head that would taking uniform noise, gate how much to let through,
+            #and then choose how much to mix that noise with the policy
+            #it might be good, but for now lets keep it simple
             noise = Variable(torch.from_numpy(np.random.dirichlet(
                 [1] * config.R * config.C, size=(config.BATCH_SIZE,)).astype("float32")))
             if config.CUDA:
@@ -104,11 +107,12 @@ class QP(nn.Module):
         self.Q = QModule()
         self.P = PolicyModule()
 
-    def forward(self, state, policy=None, percent_random=None):
+    def forward(self, state, policy=None, percent_random=None, correct_policies=None):
         state_out = self.StateModule(state)
 
         if policy is None:
             policy = self.P(state_out, percent_random)
+            policy = correct_policies(policy, state.detach().numpy())
             
         policy_view = policy.view(1, config.BATCH_SIZE, config.R, config.C)
         state_out = state_out.permute(1, 0, 2, 3)
