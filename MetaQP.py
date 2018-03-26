@@ -175,13 +175,13 @@ class MetaQP:
                                     results[key] += 1
                                 else:
                                     results[other] += 1
-                            else:
-                                starting_player = tasks[i]["starting_player"]
-                                curr_player = int(state[2][0][0])
-                                if starting_player != curr_player:
-                                    reward *= -1
 
-                                tasks[i]["memories"][j]["result"] = reward
+                            starting_player = tasks[i]["starting_player"]
+                            curr_player = int(state[2][0][0])
+                            if starting_player != curr_player:
+                                reward *= -1
+
+                            tasks[i]["memories"][j]["result"] = reward
                 idx += 1
 
         return is_done, tasks, results, num_done, batch_task_tensor
@@ -290,8 +290,6 @@ class MetaQP:
 
     def meta_self_play(self, states, episode_is_done, episode_num_done, bests_turn,
                        results, best_starts, starting_player_list):
-        delete_tasks = self.get_delete_tasks(episode_is_done)
-
         self.qp.eval()
         self.best_qp.eval()
         batch_task_tensor, tasks = self.setup_tasks(
@@ -343,8 +341,11 @@ class MetaQP:
                 weighted_policies[idx] = corrected_policy
                 idx += 1
 
+        delete_tasks = self.get_delete_tasks(episode_is_done)
+        is_done = deepcopy(episode_is_done)
+        
         corrected_policies = weighted_policies
-
+                
         next_batch_task_tensor = self.transition_batch_task_tensor(np.copy(batch_task_tensor),
                                                                                 corrected_policies, episode_is_done)
         bests_turn = (bests_turn+1) % 2
@@ -395,8 +396,6 @@ class MetaQP:
 
         # tasks = self.update_task_memories(
         #     tasks, corrected_final_policies, improved_task_policies)
-
-        is_done = deepcopy(episode_is_done)
 
         # sooo let me think. the new_net and best_net will continually trade off batch
         # evaluations. basically the new_net chooses some initial_moves, and
