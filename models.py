@@ -90,7 +90,7 @@ class PolicyModule(nn.Module):
             #and then choose how much to mix that noise with the policy
             #it might be good, but for now lets keep it simple
             noise = Variable(torch.from_numpy(np.random.dirichlet(
-                [1] * config.R * config.C, size=(config.BATCH_SIZE,)).astype("float32")))
+                [1] * config.R * config.C, size=(state_out.size()[0],)).astype("float32")))
             if config.CUDA:
                 noise = noise.cuda()
             policy_out = policy_out * \
@@ -107,19 +107,18 @@ class QP(nn.Module):
         self.Q = QModule()
         self.P = PolicyModule()
 
-    def forward(self, state, policy=None, percent_random=None, correct_policies=None):
+    def forward(self, state, policy=None, percent_random=None):
         state_out = self.StateModule(state)
 
         if policy is None:
             policy = self.P(state_out, percent_random)
-            policy = correct_policies(policy, state.detach().numpy())
-            
-        policy_view = policy.view(1, config.BATCH_SIZE, config.R, config.C)
-        state_out = state_out.permute(1, 0, 2, 3)
+        
+        policy_view = policy.view(state.size()[0], 1, config.R, config.C)
+        #state_out = state_out.permute(1, 0, 2, 3)
 
-        q_input = torch.cat((state_out, policy_view), axis=1)        
+        q_input = torch.cat((state_out, policy_view), dim=1)        
 
-        q_input = q_input.permute(1, 0, 2, 3)
+        #q_input = q_input.permute(1, 0, 2, 3)
 
         Q = self.Q(q_input)
 
@@ -177,7 +176,7 @@ class QHead(nn.Module):
         x = self.bn1(x)
         x = self.relu(x)
 
-        x = x.view(config.BATCH_SIZE, -1)
+        x = x.view(x.size()[0], -1)
 
         x = self.lin1(x)
         x = self.relu(x)
@@ -204,7 +203,7 @@ class PolicyHead(nn.Module):
         x = self.bn1(x)
         x = self.relu(x)
 
-        logits = self.lin(x.view(config.BATCH_SIZE, -1))
+        logits = self.lin(x.view(x.size()[0], -1))
 
         policy = F.softmax(logits, dim=1)
 

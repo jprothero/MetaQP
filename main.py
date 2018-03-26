@@ -16,11 +16,11 @@ root_state = np.zeros(shape=(3, 6, 7), dtype="float32")
 iteration = 0
 
 metaqp = MetaQP(actions=actions, calculate_reward=calculate_reward,
-    get_legal_actions=get_legal_actions, transition=transition)
+    get_legal_actions=get_legal_actions, transition=transition, cuda=False)
 
 while True:
     metaqp.train_memories()
-    metaqp.meta_self_play(root_state)
+    metaqp.run_episode(root_state)
 
     iteration += 1
     print("Iteration Number "+str(iteration))

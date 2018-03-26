@@ -17,7 +17,6 @@ from copy import deepcopy
 
 np.seterr(all="raise")
 
-
 class MetaQP:
     def __init__(self,
                  actions,
@@ -52,13 +51,13 @@ class MetaQP:
         if mask:
             legal_actions = self.get_legal_actions(state[:2])
 
-            mask = torch.from_numpy(np.zeros((len(self.actions),)))
+            mask = np.zeros((len(self.actions),))
             mask[legal_actions] = 1
 
             policy = policy * mask
 
-        pol_sum = (torch.sum(policy * 1.0))
-
+        pol_sum = (np.sum(policy * 1.0))
+        
         if pol_sum == 0:
             pass
         else:
@@ -138,12 +137,11 @@ class MetaQP:
                         states.extend([new_state])
                 else:
                     batch_task_tensor[i] = np.array(state)
-                    state = batch_task_tensor[i]
                     action = np.random.choice(self.actions, p=policy)
-                    curr_player = int(state[2][0][0])
-                    state[curr_player] = self.transition(
-                            state[curr_player], action)
-                    state[2] = (curr_player + 1) % 2
+                    curr_player = int(batch_task_tensor[i][2][0][0])
+                    batch_task_tensor[i][curr_player] = self.transition(
+                            batch_task_tensor[i][curr_player], action)
+                    batch_task_tensor[i][2] = (curr_player + 1) % 2
         if main:
             return states, batch_task_tensor
         else:
@@ -160,8 +158,8 @@ class MetaQP:
                     if len(legal_actions) == 0:
                         is_done[idx] = True
                         num_done += 1
-                        if tasks is not None:
-                            tasks[i][idx]["result"] = 0
+                        tasks[i]["memories"][j]["result"] = 0
+                        if results is not None:
                             results["draw"] += 1
                     else:
                         reward, game_over = self.calculate_reward(state[:2])
@@ -169,11 +167,12 @@ class MetaQP:
                         if game_over:
                             is_done[idx] = True
                             curr_player = int(state[2][0][0])
-                            if tasks is not None:
-                                if tasks[i]["starting_player"] != curr_player:
-                                    reward *= -1
-
-                                tasks[i]["memories"][j]["result"] = reward
+                            if tasks[i]["starting_player"] != curr_player:
+                                reward *= -1
+                            
+                            tasks[i]["memories"][j]["result"] = reward
+                            #this is probably wrong I need to think about it
+                            if results is not None:
                                 if best_turn == 1:
                                     key = "best"
                                     other = "new"
@@ -191,23 +190,22 @@ class MetaQP:
 
         return is_done, tasks, results, num_done
     
-    def setup_tasks(self, states):
+    def setup_tasks(self, states, starting_player_list):
         tasks = []
         batch_task_tensor = np.zeros((config.EPISODE_BATCH_SIZE,
                                       config.CH, config.R, config.C))
         idx = 0
         for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
-            #copy the state
-            if type(states) == "list":
+            if len(states) != config.CH:
                 diff_state = states[i]
             else:
                 diff_state = np.array(states)
-            # starting player chosen randomly
-            starting_player = np.random.choice(2)
+            starting_player = starting_player_list[i]
+            starting_player_list[i] = (starting_player_list[i]+1)%2
             diff_state[2] = starting_player
 
             task = {
-                "state": np.array(state), "starting_player": starting_player, "memories": []
+                "state": np.array(diff_state), "starting_player": starting_player, "memories": []
             }
 
             tasks.extend([task])
@@ -215,7 +213,7 @@ class MetaQP:
             for _ in range(config.N_WAY):
                 batch_task_tensor[idx] = diff_state
                 
-        return batch_task_tensor, tasks
+        return batch_task_tensor, tasks, starting_player_list
     
     def run_episode(self, orig_states):
         np.set_printoptions(precision=3)
@@ -228,22 +226,29 @@ class MetaQP:
             episode_is_done.extend([False])
             
         episode_num_done = 0
-        while episode_num_done < config.EPISODE_BATCH_SIZE:
-            states, episode_is_done, episode_num_done, results = self.meta_self_play(states, episode_is_done, episode_num_done, results)
-                
-            print("Results: ", results)
-            if results["new"] > results["best"] * config.SCORING_THRESHOLD:
-                model_utils.save_model(self.qp)
-                print("Loading new best model")
-                self.best_qp = model_utils.load_model()
-                if self.cuda:
-                    self.best_qp = self.best_qp.cuda()
-            elif results["best"] > results["new"] * config.SCORING_THRESHOLD:
-                print("Reverting to previous best")
-                self.qp = model_utils.load_model()
-                if self.cuda:
-                    self.qp = self.qp.cuda()
-                self.q_optim, self.p_optim = model_utils.setup_optims(self.qp)
+        
+        best_turn = np.random.choice(2)
+        
+        starting_player_list = [np.random.choice(2) for _ in range(config.EPISODE_BATCH_SIZE//config.N_WAY)]
+
+        while episode_num_done < config.EPISODE_BATCH_SIZE//config.N_WAY:
+            print("Num done {}".format(episode_num_done))
+            states, episode_is_done, episode_num_done, results, starting_player_list = self.meta_self_play(states, episode_is_done, episode_num_done, best_turn, results, starting_player_list)
+            best_turn = (best_turn+1)%2
+            
+        print("Results: ", results)
+        if results["new"] > results["best"] * config.SCORING_THRESHOLD:
+            model_utils.save_model(self.qp)
+            print("Loading new best model")
+            self.best_qp = model_utils.load_model()
+            if self.cuda:
+                self.best_qp = self.best_qp.cuda()
+        elif results["best"] > results["new"] * config.SCORING_THRESHOLD:
+            print("Reverting to previous best")
+            self.qp = model_utils.load_model()
+            if self.cuda:
+                self.qp = self.qp.cuda()
+            self.q_optim, self.p_optim = model_utils.setup_optims(self.qp)   
 
                 
     def get_delete_tasks(self, episode_is_done):
@@ -255,42 +260,44 @@ class MetaQP:
             
         return delete_tasks
                 
-    def meta_self_play(self, states, results, episode_is_done, episode_num_done):
+    def meta_self_play(self, states, episode_is_done, episode_num_done, best_turn, results, starting_player_list):
         delete_tasks = self.get_delete_tasks(episode_is_done)
         
         self.qp.eval()
         self.best_qp.eval()
-        batch_task_tensor, tasks = self.setup_tasks(states)
+        batch_task_tensor, tasks, starting_player_list = self.setup_tasks(states, starting_player_list)
         
         orig_batch_task_tesnor = np.copy(batch_task_tensor)
 
         batch_task_variable = self.wrap_to_variable(batch_task_tensor)
-        best_start = np.random.choice(2)
-
-        if best_start == 1:
+        
+        if best_turn == 1:
             qp = self.best_qp
         else:
             qp = self.qp
 
-        qs, policies = qp(batch_task_variable, percent_random=.2, 
-                         correct_policies=self.correct_policies)
+        _, policies = qp(batch_task_variable, percent_random=.2)
+        
+        policies = policies.detach().data.numpy()
 
-        #policies = policies.detach().numpy()
+        policies = self.correct_policies(policies, batch_task_tensor)
 
-        #policies = self.correct_policies(policies, batch_task_tensor)
+        policies_input = self.wrap_to_variable(policies)
 
-        #policies_input = self.wrap_to_variable(policies)
+        qs, _ = qp(batch_task_variable, policies_input)
 
-        #qs, _ = qp(batch_task_variable, policies_input)
-
-        #qs = qs.detach().numpy()
+        qs = qs.detach().data.numpy()
+        
+        idx = 0
+        for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
+            for j in range(config.N_WAY):
+                tasks[i]["memories"].extend([{"policy": policies[idx]}])
+                idx += 1
 
         scaled_qs = (qs + 1) / 2
         weighted_policies = policies * scaled_qs
         
-        weighted_policies = weighted_policies.detach.numpy()
-        
-        next_states = np.array((config.EPISODE_BATCH_SIZE//config.N_WAY, config.CH, config.R, config.C))
+        weighted_policies = weighted_policies
 
         idx = 0
         for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
@@ -303,25 +310,22 @@ class MetaQP:
             corrected_policy = self.correct_policy(
                 summed_policy, batch_task_tensor[idx], mask=True)
             
-            next_states[i] = np.array(batch_task_tensor[idx])
-            self.transition(next_states[i], )
-
+            tasks[i]["improved_policy"] = np.array(corrected_policy)
             for j in range(config.N_WAY):
                 weighted_policies[idx] = corrected_policy
-                tasks[i]["memories"].extend([{"policy": corrected_policy}])
                 idx += 1
 
         corrected_policies = weighted_policies
         
         next_states, next_batch_task_tensor = self.transition_batch_task_tensor(np.array(batch_task_tensor),
                                                                   corrected_policies, episode_is_done, main=True)
-        if best_start == 1:
-            best_turn = 0
-        else:
-            best_turn = 1
-            
+        best_turn = (best_turn+1)%2
+        
         episode_is_done, _, _, episode_num_done = self.check_finished_games(next_batch_task_tensor, is_done=episode_is_done,
-                                                                tasks=None, num_done=episode_num_done, results=None, best_turn=best_turn)
+                                                                tasks=tasks, num_done=episode_num_done, results=results, best_turn=best_turn)
+        
+        #revert back to orig turn now that we are done
+        best_turn = (best_turn+1)%2
 
         # The goal is average over the 5 semi random policies weighted by the Q's
         # so at first we make a new uncorrected policy, then we pass it through the net
@@ -366,11 +370,14 @@ class MetaQP:
         # net always makes the first move, which can be significant
         # so now it's random start. so the opposing moves for each turn will be chosen
         # by the opposite net
-        num_done = 0
+        num_done = episode_num_done
 
+        policies = corrected_policies
+        
         while num_done < config.EPISODE_BATCH_SIZE:
             batch_task_tensor = self.transition_batch_task_tensor(np.array(batch_task_tensor),
-                                                                  corrected_policies, is_done)
+                                                                  policies, is_done)
+            best_turn = (best_turn+1)%2
             is_done, tasks, _, num_done = self.check_finished_games(batch_task_tensor, is_done,
                                                                           tasks, num_done, None, best_turn)
 
@@ -383,14 +390,14 @@ class MetaQP:
 
             _, policies = self.qp(batch_task_variable)
 
-            policies = policies.detach().numpy()
+            policies = policies.detach().data.numpy()
 
-            #policies = self.correct_policies(policies, batch_task_tensor)
-            print("Miniround {} of {} done".format(num_done, config.TRAINING_BATCH_SHAPE))
+            policies = self.correct_policies(policies, batch_task_tensor)
+            #print("Miniround: {} of {} done".format(num_done, config.TRAINING_BATCH_SHAPE))
 
         fixed_tasks = []
         for i, task in enumerate(tasks):
-            if not delete_task[i]:
+            if not delete_tasks[i]:
                 fixed_tasks.extend([task])
             
         self.memories.extend(fixed_tasks)
@@ -398,33 +405,7 @@ class MetaQP:
             self.memories[-config.MAX_TASK_MEMORIES:]
         utils.save_memories(self.memories)
             
-        return next_states, episode_is_done, episode_num_done, results
-    
-    def transition_main_move(self, orig_batch_task_tensor, corrected_policies):
-        states = []
-        for i, policy in enumerate(correct_policy):
-            state = orig_batch_task_tensor[i*config.N_WAY]
-            
-    
-    def convert_to_next_states(self, batch_task_tensor):
-        idx = 0
-        for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
-            summed_policy = 0
-            for j in range(config.N_WAY):
-                summed_policy += weighted_policies[idx]
-                idx += 1
-            idx -= config.N_WAY
-
-            corrected_policy = self.correct_policy(
-                summed_policy, batch_task_tensor[idx], mask=True)
-            
-            next_states[i] = np.array(batch_task_tensor[idx])
-            self.transition(next_states[i], )
-
-            for j in range(config.N_WAY):
-                weighted_policies[idx] = corrected_policy
-                tasks[i]["memories"].extend([{"policy": corrected_policy}])
-                idx += 1
+        return next_states, episode_is_done, episode_num_done, results, starting_player_list
 
     def train_memories(self):
         self.qp.train()
@@ -451,13 +432,21 @@ class MetaQP:
     def train_tasks(self, minibatches_of_tasks):
         batch_task_tensor = np.zeros((config.TRAINING_BATCH_SIZE,
                                       config.CH, config.R, config.C))
+        
+        policies_view = []
+        for i in range(config.TRAINING_BATCH_SIZE):
+            if i % config.N_WAY == 0:
+                policies_view.extend([i])
 
         result_tensor = np.zeros((config.TRAINING_BATCH_SIZE, 1))
 
         policies_tensor = np.zeros((
             config.TRAINING_BATCH_SIZE, config.R * config.C))
+        
+        improved_policies_tensor = np.zeros((
+            config.TRAINING_BATCH_SIZE//config.N_WAY, config.R * config.C))
 
-        optimal_value_tensor = np.ones((config.TRAINING_BATCH_SIZE, 1))
+        optimal_value_tensor = np.ones((config.TRAINING_BATCH_SIZE//config.N_WAY, 1))
 
         for mb in minibatches_of_tasks:
             self.q_optim.zero_grad()
@@ -469,6 +458,7 @@ class MetaQP:
             idx = 0
             for i, task in enumerate(mb):
                 state = task["state"]
+                improved_policies_tensor[i] = task["improved_policy"]
 
                 for memory in task["memories"]:
                     result_tensor[idx] = memory["result"]
@@ -478,10 +468,12 @@ class MetaQP:
                     idx += 1
 
             state_input = self.wrap_to_variable(batch_task_tensor)
-            corrected_policies_input = self.wrap_to_variable(policies_tensor)
+            #semi random policies
+            policies_input = self.wrap_to_variable(policies_tensor)
+            improved_policies_target = self.wrap_to_variable(improved_policies_tensor)
             result_target = self.wrap_to_variable(result_tensor)
 
-            Qs, _ = self.qp(state_input, corrected_policies_input)
+            Qs, _ = self.qp(state_input, policies_input)
 
             Q_loss += F.mse_loss(Qs, result_target)
 
@@ -493,18 +485,36 @@ class MetaQP:
             self.p_optim.zero_grad()
 
             Qs, policies = self.qp(state_input)
-
-            for correct_policy, policy in zip(corrected_policies_input, policies):
-                correct_policy = correct_policy.unsqueeze(0)
+            
+            corrected_policy_loss = 0
+            for corrected_policy, policy in zip(policies_input, policies):
+                corrected_policy = corrected_policy.unsqueeze(0)
                 policy = policy.unsqueeze(-1)
-                policy_loss += -torch.mm(correct_policy,
-                                         torch.log(policy)).squeeze()
+                corrected_policy_loss += -torch.mm(corrected_policy,
+                                         torch.log(policy))
+            corrected_policy_loss /= 3*len(policies_input)
+            
+            policies_smaller = policies[policies_view]
 
-            optimal_value_var = self.wrap_to_variable(optimal_value_tensor)            
+            improved_policy_loss = 0
+            for improved_policy, policy in zip(improved_policies_target, policies_smaller):
+                improved_policy = improved_policy.unsqueeze(0)
+                policy = policy.unsqueeze(-1)
+                improved_policy_loss += -torch.mm(improved_policy,
+                                         torch.log(policy))
+                
+            improved_policy_loss /= 3*len(policies_smaller)
+            
+            optimal_value_var = self.wrap_to_variable(optimal_value_tensor)
+            Qs_smaller = Qs[policies_view]
+            
+            policy_loss = corrected_policy_loss + improved_policy_loss + F.mse_loss(Qs_smaller, optimal_value_var)
+            
+            #/ and * 2 to balance improved policies matching and regression 
 
-            for _ in range(config.TRAINING_BATCH_SIZE):
-                Qs, policies = self.qp(state_input)
-                policy_loss += F.mse_loss(Qs, optimal_value_var)
+            #for _ in range(config.TRAINING_BATCH_SIZE):
+                #Qs, policies = self.qp(state_input)
+                #policy_loss += F.mse_loss(Qs, optimal_value_var)
 
             policy_loss.backward()
 
