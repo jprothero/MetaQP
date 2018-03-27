@@ -458,15 +458,16 @@ class MetaQP:
             return
 
         for _ in tqdm(range(config.TRAINING_LOOPS)):
-            tasks = sample(self.memories, config.SAMPLE_SIZE)
+            # tasks = sample(self.memories, config.SAMPLE_SIZE)
+            minibatch = sample(self.memories, config.TRAINING_BATCH_SIZE)
 
-            BATCH_SIZE = config.TRAINING_BATCH_SIZE // config.N_WAY
-            extra = config.SAMPLE_SIZE % BATCH_SIZE
-            minibatches = [
-                tasks[x:x + BATCH_SIZE]
-                for x in range(0, len(tasks) - extra, BATCH_SIZE)
-            ]
-            self.train_tasks(minibatches)
+            # BATCH_SIZE = config.TRAINING_BATCH_SIZE // config.N_WAY
+            # extra = config.SAMPLE_SIZE % BATCH_SIZE
+            # minibatches = [
+            #     tasks[x:x + BATCH_SIZE]
+            #     for x in range(0, len(tasks) - extra, BATCH_SIZE)
+            # ]
+            self.train_tasks(minibatch)
 
         # self.train_minibatches(minibatches)
 
