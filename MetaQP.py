@@ -120,6 +120,45 @@ class MetaQP:
 
     #     return policies
 
+    def transition_and_evaluate_minibatch(self, minibatch, policies, tasks, num_done, is_done, 
+            results, bests_turn, best_starts):
+        task_idx = 0
+        n_way_idx = 0
+        for i, (state, policy) in enumerate(zip(minibatch, policies)):
+            if i % config.N_WAY == 0 and i != 0:
+                task_idx += 1
+                n_way_idx += 1
+                n_way_idx = n_way_idx % config.N_WAY
+
+            if not is_done[i]:
+                state = np.array(state)
+                minibatch[i] = state
+                action = np.random.choice(self.actions, p=policy)
+                
+                state, reward, game_over = self.transition_and_evaluate(state, action)
+                if game_over:
+                    is_done[i] = True
+                    num_done += 1
+                    if results is not None:
+                        for k in range(config.N_WAY-n_way_idx):
+                            if not is_done[i+k] and k != 0:
+                                is_done[i+k] = True
+                                is_done[i] = False
+                                minibatch[i] = np.array(
+                                    minibatch[i+k])
+                                break
+                            if bests_turn == best_starts:
+                                results["best"] += 1
+                            else:
+                                results["new"] += 1                                
+                    else:
+                        starting_player = tasks[task_idx]["starting_player"]
+                        curr_player = int(state[2][0][0])
+                        if starting_player != curr_player:
+                            reward *= -1
+
+                        tasks[task_idx]["memories"][n_way_idx]["result"] = reward
+
     def transition_batch_task_tensor(self, batch_task_tensor,
                                      corrected_final_policies, is_done):
         for i, (state, policy) in enumerate(zip(batch_task_tensor,
@@ -342,7 +381,7 @@ class MetaQP:
         next_batch_task_tensor = self.transition_batch_task_tensor(np.copy(batch_task_tensor),
                                                                    corrected_policies, episode_is_done)
         
-        
+        next_batch_task_tensor = self.transition_batch(batch, corrected_policies, episode_is_done)
 
         bests_turn = (bests_turn+1) % 2
 
@@ -420,6 +459,25 @@ class MetaQP:
             else:
                 qp = self.qp
 
+            #Idea: since I am going through a trajectory of states, I could probably
+            #also learn a value function and have the Q value for the original policy
+            #be a combination of the V and the reward. so basically we could use the V
+            #function in a couple different ways. for the main moves we could use it
+            #to scale the policies according to the V values from the transitioned states,
+            #i.e. for each of the transitioned states from the improved policies, we 
+            #look at the V values from those, and scale the action probas according to those
+            #so basically we could rescale it to 0-1 and then multiply it with the policies
+            #and it should increase the probabilities for estimatedly good actions and 
+            #decrease for bad ones
+
+            #for the inner loop Q estimation trajectories we could average together the V
+            #values for each of the states, i.e. we could have an additional target
+            #for the Q network, which is the averaged together V values from the trajectory
+            #that should provide a fairly good estimate of the Q value, and won't be
+            #as noisy as the result
+
+            #another possible improvement is making the policy noise learnable, i.e.
+            #the scale of the noise, and how much weight it has relative to the generated policy
             _, policies = self.qp(batch_task_variable)
 
             policies = policies.detach().data.numpy()
