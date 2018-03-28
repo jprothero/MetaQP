@@ -9,61 +9,27 @@ class Connect4:
         self.rows = rows
         self.columns = columns
         self.datatype = datatype
-        self._create_win_patterns()
         self._create_legal_moves_pattern()
-        self._create_valid_pattern()
-        self._create_valid_pattern2()
-        
-    def _create_win_patterns(self):
-        self.win_patterns = [i for i in range(4)]
-        self.horizontal_win = self.win_patterns[0] = np.array([[1, 1, 1, 1]])
-        
-        vertical_win = np.array([1, 1, 1, 1])
-        vertical_win = np.expand_dims(vertical_win, -1)
-        self.vertical_win = self.win_patterns[1] = vertical_win
-        
-        self.left_diag_win = self.win_patterns[2] = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
-        ])
-        
-        self.right_diag_win = self.win_patterns[3] = np.array([
-            [0, 0, 0, 1],
-            [0, 0, 1, 0],
-            [0, 1, 0, 0],
-            [1, 0, 0, 0]
-        ])
+        self._create_actions()
         
     def _create_legal_moves_pattern(self):
 #         self.legal_move_pattern = np.array([1 for i in range(self.rows)])
         self.legal_move_pattern = np.array([0])
         self.legal_move_pattern = np.expand_dims(self.legal_move_pattern, -1)
-
-    def _create_valid_pattern(self):
-#         self.legal_move_pattern = np.array([1 for i in range(self.rows)])
-        self.valid_pattern = np.array([1, 0])
-        self.valid_pattern = np.expand_dims(self.valid_pattern, -1)
-
-    def _create_valid_pattern2(self):
-    #         self.legal_move_pattern = np.array([1 for i in range(self.rows)])
-        self.valid_pattern2 = np.array([2])
-        self.valid_pattern2 = np.expand_dims(self.valid_pattern2, -1)
         
-    def calculate_reward(self, joint_states, idx):
-        for k, state in enumerate(joint_states):
-            match = cv2m(pattern.astype(self.datatype), state.astype(self.datatype), 
-                            cv2.TM_SQDIFF)
+    # def calculate_reward(self, joint_states, idx):
+    #     for k, state in enumerate(joint_states):
+    #         match = cv2m(pattern.astype(self.datatype), state.astype(self.datatype), 
+    #                         cv2.TM_SQDIFF)
 
-            i, j = np.where(match==0)
-            if len(i) != 0 or len(j) != 0:
-                if k == 0:
-                    return 1, True
-                else:
-                    return -1, True
+    #         i, j = np.where(match==0)
+    #         if len(i) != 0 or len(j) != 0:
+    #             if k == 0:
+    #                 return 1, True
+    #             else:
+    #                 return -1, True
 
-        return 0, False
+    #     return 0, False
     
     def _create_actions(self):
         self.actions = [i for i in range(self.rows*self.columns)]
@@ -85,76 +51,53 @@ class Connect4:
 
         return legal_moves
 
-    def transition_and_evaluate(self, state, action):
-        orig_player = int(state[2][0])        
+    def transition_and_evaluate(self, full_state, action):
+        orig_player = int(full_state[2][0][0])
+
+        plane = full_state[orig_player]
 
         idx = action
         
-        i, j = np.unravel_index([idx], state.shape)
+        i, j = np.unravel_index([idx], plane.shape)
         i = i[0]
         j = j[0]
         
-        state[i][j] = 1
+        plane[i][j] = 1
 
         new_player = (orig_player+1)%2
-        state[2] = new_player
+        full_state[2] = new_player
 
-        game_over = check_win(state, i, j)
+        assert full_state[orig_player][i][j] == 1
+
+        game_over = check_win(plane, i, j)
 
         if game_over:
             result = 1
         else:
-            legal_actions = self.get_legal_actions(state[:2])
+            legal_actions = self.get_legal_actions(full_state[:2])
             if len(legal_actions) == 0:
                 result = 0
                 game_over = True
             else:
                 result = None
 
-        return state, result, game_over
-
-    def get_legal_mask(self, input_states, add_noise=False, deterministic=False):
-            legal_moves_mask = np.copy(input_states.data.numpy())
-
-            log_probas_list = []
-            legal_moves_lists = []
-            
-            #legal_moves_mask will be (128,3 , 6, 7)
-            #I only care about the first two states, so that's right
-            for s, state in enumerate(legal_moves_mask[:, :2]):
-                state_legal_moves_list = []
-                for k in range(state.shape[1]):
-                    match = cv2m(self.legal_move_pattern.astype(self.datatype), 
-                                state[:, k].astype(self.datatype), cv2.TM_SQDIFF)
-                    
-                    i, j = np.where(match==0)
-                    
-                    if len(i) != 0:
-                        #I think I need a k index
-                        idx = np.max(i)*state.shape[1] + k
-                        legal_moves_mask[s][k][idx] = 1
-                        state_legal_moves_list.extend([idx])
-
-                legal_moves_list.extend(state_legal_moves_list)
-                legal_moves_mask[s][:2].flatten()[state_legal_moves_list] = 1
-
-            return legal_moves_mask, legal_moves_list
+        return full_state, result, game_over
 
 #### Static testing functions
-def test_transition():
-    connect4 = Connect4()
+# def test_transition():
+#     connect4 = Connect4()
     
-    board = np.zeros(shape=(6, 7))
+#     board = np.zeros(shape=(6, 7))
     
-    for i in range(1000):
-        action = np.random.randint(42)
+#     for i in range(1000):
+#         action = np.random.randint(42)
         
-        test = np.copy(board.flatten())
-        test[action] = 1
+#         test = np.copy(board.flatten())
+#         test[action] = 1
 
-        board = connect4.transition(board, action)
+#         board = connect4.transition(board, action)
         
-        assert (board.flatten() == test).all()
+#         assert (board.flatten() == test).all()
 
 def test_legal_moves_finder():
     connect4 = Connect4()
@@ -182,40 +125,50 @@ def test_win_checkers():
     right_down_diag_win = np.copy(board)
     
     left_win[0][:4] = 1; left_win #0, 3
-    assert(check_win(left_win, 0, 3))
+    assert check_win(left_win, 0, 3)
+    left_win[0][0] = 0
+    assert not check_win(left_win, 0, 3)
     
     right_win[0][:4] = 1; right_win #0, 0
     assert(check_win(right_win, 0, 0))
+    right_win[0][3] = 0
+    assert not check_win(right_win, 0, 0)
     
     for i in range(4):
         up_win[i][0] = 1
-    up_win #3, 0
     assert(check_win(up_win, 3, 0))
+    up_win[0][0] = 0
+    assert not check_win(up_win, 3, 0)
     
     for i in range(4):
         down_win[i][0] = 1
-    down_win #0, 0
     assert(check_win(down_win, 0, 0))
+    down_win[3][0] = 0
+    assert not check_win(down_win, 0, 0)
     
     for i in range(4):
         left_up_diag_win[i, i] = 1
-    left_up_diag_win #3, 3
     assert(check_win(left_up_diag_win, 3, 3))
+    left_up_diag_win[0][0] = 0
+    assert not check_win(left_up_diag_win, 3, 3)
     
     for i in range(4):
-        left_down_diag_win[i, i] = 1
-    left_down_diag_win #0, 0
-    assert(check_win(left_down_diag_win, 0, 0))
+        left_down_diag_win[i, 3-i] = 1
+    assert(check_win(left_down_diag_win, 0, 3))
+    left_down_diag_win[3][0] = 0
+    assert not check_win(left_down_diag_win, 0, 3)
     
     for i in range(4):
-        right_up_diag_win[i, 3-i] = 1
-    right_up_diag_win #3, 0
+        right_up_diag_win[3-i, i] = 1
     assert(check_win(right_up_diag_win, 3, 0))
+    right_up_diag_win[0][3] = 0
+    assert not check_win(right_up_diag_win, 3, 0)
     
     for i in range(4):
-        right_down_diag_win[i, 3-i] = 1
-    right_down_diag_win #0, 3
-    assert(check_win(right_down_diag_win, 0, 3))
+        right_down_diag_win[i, i] = 1
+    assert check_win(right_down_diag_win, 0, 0)
+    right_down_diag_win[3][3] = 0
+    assert not check_win(right_down_diag_win, 0, 0)
 
 def check_win(state, i, j):
     done = False
@@ -328,11 +281,11 @@ def check_diag_left_down(state, i, j):
     return False
 
 def check_diag_right_up(state, i, j):
-    if i < (state.shape[0]-3) and j < (state.shape[1]-3):
+    if i > 2 and j < (state.shape[1]-3):
         num_in_a_row = 0
         
         for k in range(1, 4):
-            if state[i+k][j+k] == 0:
+            if state[i-k][j+k] == 0:
                 break
             else:
                 num_in_a_row += 1
@@ -342,11 +295,11 @@ def check_diag_right_up(state, i, j):
     return False
 
 def check_diag_right_down(state, i, j):
-    if i > 2 or j < (state.shape[1]-3):
+    if i < state.shape[0]-3 and j < (state.shape[1]-3):
         num_in_a_row = 0
         
         for k in range(1, 4):
-            if state[i-k][j+k] == 0:
+            if state[i+k][j+k] == 0:
                 break
             else:
                 num_in_a_row += 1

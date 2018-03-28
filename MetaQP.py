@@ -82,16 +82,18 @@ class MetaQP:
         for i, (state, policy) in enumerate(zip(minibatch, policies)):
             if i % config.N_WAY == 0 and i != 0:
                 task_idx += 1
+            if i != 0:
                 n_way_idx += 1
                 n_way_idx = n_way_idx % config.N_WAY
 
             if not is_done[i]:
-                state = np.array(state)
-                minibatch[i] = state
                 action = np.random.choice(self.actions, p=policy)
 
                 state, reward, game_over = self.transition_and_evaluate(
-                    state, action)
+                    np.array(state), action)
+
+                minibatch[i] = state
+
                 bests_turn = (bests_turn+1) % 2
 
                 if game_over:
@@ -105,30 +107,32 @@ class MetaQP:
                                 minibatch[i] = np.array(
                                     minibatch[i+k])
                                 break
-                            if bests_turn == best_starts:
-                                results["best"] += 1
-                            else:
-                                results["new"] += 1
+                        if bests_turn == best_starts:
+                            results["best"] += 1
+                        else:
+                            results["new"] += 1
                     else:
-                        starting_player = tasks[task_idx]["starting_player"]
-                        curr_player = int(state[2][0][0])
-                        if starting_player != curr_player:
-                            reward *= -1
+                        if tasks[task_idx] is not None:
+                            starting_player = tasks[task_idx]["starting_player"]
+                            curr_player = int(state[2][0][0])
+                            if starting_player != curr_player:
+                                reward *= -1
 
-                        tasks[task_idx]["memories"][n_way_idx]["result"] = reward
+                            tasks[task_idx]["memories"][n_way_idx]["result"] = reward
 
-    return minibatch, tasks, num_done, is_done, results, bests_turn
+        return minibatch, tasks, num_done, is_done, results, bests_turn
 
     def get_states_from_next_minibatch(self, next_minibatch):
         states = []
         for i, state in enumerate(next_minibatch):
-            states.extend([np.array(state)])
+            if i % config.N_WAY == 0:
+                states.extend([np.array(state)])
 
         return states
 
     def setup_tasks(self, states, starting_player_list, episode_is_done):
         tasks = []
-        batch_task_tensor = np.zeros((config.EPISODE_BATCH_SIZE,
+        minibatch = np.zeros((config.EPISODE_BATCH_SIZE,
                                       config.CH, config.R, config.C))
         idx = 0
         for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
@@ -143,10 +147,10 @@ class MetaQP:
                 tasks.extend([None])
 
             for _ in range(config.N_WAY):
-                batch_task_tensor[idx] = states[i]
+                minibatch[idx] = np.array(states[i])
                 idx += 1
 
-        return batch_task_tensor, tasks
+        return minibatch, tasks
 
     def run_episode(self, orig_states):
         np.set_printoptions(precision=3)
@@ -189,6 +193,10 @@ class MetaQP:
                                                                                      starting_player_list=starting_player_list)
             bests_turn = (bests_turn+1) % 2
 
+
+        if len(self.memories) > config.MAX_TASK_MEMORIES:
+            self.memories[-config.MAX_TASK_MEMORIES:]
+        utils.save_memories(self.memories)
         print("Results: ", results)
         if results["new"] > results["best"] * config.SCORING_THRESHOLD:
             model_utils.save_model(self.qp)
@@ -276,7 +284,6 @@ class MetaQP:
                                                                          results=results)
 
         next_states = self.get_states_from_next_minibatch(next_minibatch)
-
         # revert back to orig turn now that we are done
         bests_turn = (bests_turn+1) % 2
 
@@ -335,9 +342,6 @@ class MetaQP:
                 fixed_tasks.extend([task])
 
         self.memories.extend(fixed_tasks)
-        if len(self.memories) > config.MAX_TASK_MEMORIES:
-            self.memories[-config.MAX_TASK_MEMORIES:]
-        utils.save_memories(self.memories)
 
         return next_states, episode_is_done, episode_num_done, results
 

@@ -14,7 +14,7 @@ transition_and_evaluate = connect4.transition_and_evaluate
 root_state = np.zeros(shape=(3, 6, 7), dtype="float32")
 iteration = 0
 
-metaqp = MetaQP(actions=actions, calculate_reward=calculate_reward,
+metaqp = MetaQP(actions=actions, get_legal_actions=get_legal_actions,
     transition_and_evaluate=transition_and_evaluate, cuda=False)
 
 while True:
