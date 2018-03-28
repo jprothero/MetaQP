@@ -8,15 +8,14 @@ import torch
 
 connect4 = Connect4()
 actions = connect4.actions
-calculate_reward = connect4.calculate_reward
 get_legal_actions = connect4.get_legal_actions
-transition = connect4.transition
+transition_and_evaluate = connect4.transition_and_evaluate
 
 root_state = np.zeros(shape=(3, 6, 7), dtype="float32")
 iteration = 0
 
 metaqp = MetaQP(actions=actions, calculate_reward=calculate_reward,
-    get_legal_actions=get_legal_actions, transition=transition, cuda=False)
+    transition_and_evaluate=transition_and_evaluate, cuda=False)
 
 while True:
     metaqp.train_memories()
