@@ -226,13 +226,13 @@ class MetaQP:
 
         policies = policies.detach().data.numpy()
 
-        corrected_policies = self.correct_policies(policies, minibatch)
+        policies = self.correct_policies(policies, minibatch)
 
-        corrected_policies_copy = np.array(corrected_policies)
+        policies_copy = np.array(policies)
 
-        corrected_policies_input = self.wrap_to_variable(corrected_policies)
+        policies_input = self.wrap_to_variable(policies)
 
-        qs, _ = qp(minibatch_variable, corrected_policies_input)
+        qs, _ = qp(minibatch_variable, policies_input)
 
         qs = qs.detach().data.numpy()
 
@@ -240,38 +240,37 @@ class MetaQP:
         for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
             for _ in range(config.N_WAY):
                 if tasks[i] is not None:
-                    tasks[i]["memories"].extend([{"policy": corrected_policies[idx]}])
+                    tasks[i]["memories"].extend([{"policy": policies[idx]}])
                 idx += 1
 
         scaled_qs = (qs + 1) / 2
-        weighted_corrected_policies = corrected_policies * scaled_qs
+        weighted_policies = policies * scaled_qs
 
         idx = 0
         for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
             summed_policy = 0
             for _ in range(config.N_WAY):
-                summed_policy += weighted_corrected_policies[idx]
+                summed_policy += weighted_policies[idx]
                 idx += 1
             idx -= config.N_WAY
 
-            improved_policy = self.correct_policy(
+            corrected_policy = self.correct_policy(
                 summed_policy, minibatch[idx], mask=True)
 
             if tasks[i] is not None:
-                tasks[i]["improved_policy"] = improved_policy
+                tasks[i]["improved_policy"] = np.array(corrected_policy)
             for _ in range(config.N_WAY):
-                #reuse weighted_corrected_policies tensor
-                weighted_corrected_policies[idx] = improved_policy
+                weighted_policies[idx] = corrected_policy
                 idx += 1
-        improved_policies = weighted_corrected_policies
 
         is_done = deepcopy(episode_is_done)
 
-        #minibatch is a copy because we dont want to start from there for the loop below
+        corrected_policies = weighted_policies
+
         next_minibatch, tasks, \
             episode_num_done, episode_is_done, \
             results, bests_turn = self.transition_and_evaluate_minibatch(minibatch=np.array(minibatch),
-                                                                         policies=improved_policies,
+                                                                         policies=corrected_policies,
                                                                          tasks=tasks,
                                                                          num_done=episode_num_done,
                                                                          is_done=episode_is_done,
@@ -285,14 +284,12 @@ class MetaQP:
 
         num_done = episode_num_done
 
-        policies = corrected_policies_copy
+        policies = policies_copy
 
         while num_done < config.EPISODE_BATCH_SIZE:
-            #minibatch doesnt need to be a copy because we are transitioning in place
-            #or maybe it does because we made it a variable? need to see.
             minibatch, tasks, \
             num_done, is_done, \
-            _, bests_turn = self.transition_and_evaluate_minibatch(minibatch=minibatch,
+            _, bests_turn = self.transition_and_evaluate_minibatch(minibatch=np.array(minibatch),
                                                                          policies=policies,
                                                                          tasks=tasks,
                                                                          num_done=num_done,
