@@ -13,7 +13,6 @@ class Connect4:
         self._create_legal_moves_pattern()
         self._create_valid_pattern()
         self._create_valid_pattern2()
-        self._create_actions()
         
     def _create_win_patterns(self):
         self.win_patterns = [i for i in range(4)]
