@@ -66,9 +66,9 @@ class Connect4:
 
         new_player = (orig_player+1)%2
         full_state[2] = new_player
-
-        assert full_state[orig_player][i][j] == 1
-
+        #right diag and up down are working
+        #left right is working
+        # assert full_state[orig_player][i][j] == 1
         game_over = check_win(plane, i, j)
 
         if game_over:
@@ -172,138 +172,105 @@ def test_win_checkers():
 
 def check_win(state, i, j):
     done = False
-    done = check_left(state, i, j)
+    done = check_up_down(state, i, j)
     if done:
         return done
-    done = check_right(state, i, j)
+    done = check_left_right(state, i, j)
     if done:
         return done
-    done = check_up(state, i, j)
+    done = check_right_diag(state, i, j)
     if done:
         return done
-    done = check_down(state, i, j)
-    if done:
-        return done
-    done = check_diag_left_up(state, i, j)
-    if done:
-        return done
-    done = check_diag_left_down(state, i, j)
-    if done:
-        return done
-    done = check_diag_right_up(state, i, j)
-    if done:
-        return done
-    done = check_diag_right_down(state, i, j)
-    return done
+    return check_left_diag(state, i, j)
 
-def check_left(state, i, j):
-    if j > 2:
+def check_up_down(state, i, j):
+    num_in_a_row = 0
+    for r in range(state.shape[0]):
+        if state[r, j] == 0:
+            num_in_a_row = 0
+        else:
+            num_in_a_row += 1
+            if num_in_a_row == 4:
+                return True
+    return False
+
+def check_left_right(state, i, j):
+    num_in_a_row = 0
+    for c in range(state.shape[1]):
+        if state[i, c] == 0:
+            num_in_a_row = 0
+        else:
+            num_in_a_row += 1
+            if num_in_a_row == 4:
+                return True
+    return False
+
+def check_right_diag(state, i, j):
+    r = i
+    c = j
+    while r < state.shape[0]-1 and c > 0:
+        r += 1
+        c -= 1
+    
+    if c == 0:
         num_in_a_row = 0
-        
-        for k in range(1, 4):
-            if state[i][j-k] == 0:
+        for c in range(state.shape[1]):
+            if r < 0:
                 break
+            if state[r, c] == 0:
+                num_in_a_row = 0
             else:
                 num_in_a_row += 1
-            if num_in_a_row == 3:
-                return True
+                if num_in_a_row == 4:
+                    return True
+            r -= 1
+    else:
+        num_in_a_row = 0
+        for r in reversed(range(state.shape[0])):
+            if c > state.shape[1]-1:
+                break
+            if state[r, c] == 0:
+                num_in_a_row = 0
+            else:
+                num_in_a_row += 1
+                if num_in_a_row == 4:
+                    return True 
+                
+            c += 1
             
     return False
 
-def check_right(state, i, j):
-    if j < (state.shape[1]-3):
+def check_left_diag(state, i, j):
+    r = i
+    c = j
+    while r > 0 and c > 0:
+        r -= 1
+        c -= 1
+    
+    if c == 0:
         num_in_a_row = 0
-        
-        for k in range(1, 4):
-            if state[i][j+k] == 0:
+        for c in range(state.shape[1]):
+            if r > state.shape[0]-1:
                 break
+            if state[r, c] == 0:
+                num_in_a_row = 0
             else:
                 num_in_a_row += 1
-            if num_in_a_row == 3:
-                return True
-            
-    return False
-
-def check_up(state, i, j):
-    if i > 2:
+                if num_in_a_row == 4:
+                    return True
+            r += 1
+    else:
         num_in_a_row = 0
-        
-        for k in range(1, 4):
-            if state[i-k][j] == 0:
+        for r in range(state.shape[0]):
+            if c > state.shape[1]-1:
                 break
+            if state[r, c] == 0:
+                num_in_a_row = 0
             else:
                 num_in_a_row += 1
-            if num_in_a_row == 3:
-                return True
-            
-    return False
-
-def check_down(state, i, j):
-    if i < (state.shape[0]-3):
-        num_in_a_row = 0
-        
-        for k in range(1, 4):
-            if state[i+k][j] == 0:
-                break
-            else:
-                num_in_a_row += 1
-            if num_in_a_row == 3:
-                return True
-            
-    return False
-
-def check_diag_left_up(state, i, j):
-    if i > 2 or j > 2:
-        num_in_a_row = 0
-        
-        for k in range(1, 4):
-            if state[i-k][j-k] == 0:
-                break
-            else:
-                num_in_a_row += 1
-            if num_in_a_row == 3:
-                return True
-            
-    return False
-
-def check_diag_left_down(state, i, j):
-    if i < (state.shape[0]-3) and j > 2:
-        num_in_a_row = 0
-        
-        for k in range(1, 4):
-            if state[i+k][j-k] == 0:
-                break
-            else:
-                num_in_a_row += 1
-            if num_in_a_row == 3:
-                return True
-            
-    return False
-
-def check_diag_right_up(state, i, j):
-    if i > 2 and j < (state.shape[1]-3):
-        num_in_a_row = 0
-        
-        for k in range(1, 4):
-            if state[i-k][j+k] == 0:
-                break
-            else:
-                num_in_a_row += 1
-            if num_in_a_row == 3:
-                return True
-            
-    return False
-
-def check_diag_right_down(state, i, j):
-    if i < state.shape[0]-3 and j < (state.shape[1]-3):
-        num_in_a_row = 0
-        
-        for k in range(1, 4):
-            if state[i+k][j+k] == 0:
-                break
-            else:
-                num_in_a_row += 1
-            if num_in_a_row == 3:
-                return True
+                if num_in_a_row == 4:
+                    return True 
+                
+            c += 1
             
     return False

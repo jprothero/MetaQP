@@ -11,9 +11,9 @@ from IPython.core.debugger import set_trace
 def conv_layer(in_planes, out_planes):
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=1)
 
-def make_layer(in_dims, h_dims, block, out_dims=None):
+def make_layer(in_dims, h_dims, block, out_dims=None, head="normal"):
     layers = []
-    layers.append(block(in_dims, h_dims, out_dims))
+    layers.append(block(in_dims, h_dims, out_dims, head))
 
     return nn.Sequential(*layers)
 
@@ -74,27 +74,69 @@ class PolicyModule(nn.Module):
             config.NUM_P_RES_FILTERS,
             config.NUM_P_RES_FILTERS,
             ResBlock)
+
         self.p_res_out = make_layer(
             config.NUM_P_RES_FILTERS,
             config.NUM_P_RES_FILTERS,
             PolicyHead,
             config.R * config.C)
 
+        #could also do a relu(tanh()) to get probability distribution
+        self.noise_attention_head = make_layer(
+            config.NUM_P_RES_FILTERS,
+            config.NUM_P_RES_FILTERS,
+            PolicyHead,
+            config.R * config.C)
+
+        self.noise_gating_head = make_layer(
+            config.NUM_P_RES_FILTERS,
+            config.NUM_P_RES_FILTERS,
+            PolicyHead,
+            config.R * config.C,
+            head="relu_tanh")
+
     def forward(self, state_out, percent_random):
         p = self.p_res_inp(state_out)
         p = self.p_res1(p)
         policy_out = self.p_res_out(p)
-
-        if percent_random is not None:
-            #so the other idea was learning a head that would taking uniform noise, gate how much to let through,
-            #and then choose how much to mix that noise with the policy
-            #it might be good, but for now lets keep it simple
-            noise = Variable(torch.from_numpy(np.random.dirichlet(
-                [1] * config.R * config.C, size=(state_out.size()[0],)).astype("float32")))
-            if config.CUDA:
+        #this will in effect choose one of the policies to be random.
+        #this might be ideal since we are mixing policies
+        #consider adding in a relu(tanh()) head to control the magnitude of the mixing
+        #why not add it now.
+        noise_gating = self.noise_gating_head(p)
+        noise_attention = self.noise_attention_head(p)
+  
+        noise = Variable(torch.from_numpy(np.random.uniform(size=(state_out.size()[0], config.R*config.C)).astype('float32')))
+        if config.CUDA:
                 noise = noise.cuda()
-            policy_out = policy_out * \
-                (1 - percent_random) + noise * percent_random
+
+        #consider removing one and seeing how it effects performance
+        noise = noise_gating*noise_attention*noise
+        policy_out = policy_out * (1 - noise) + noise
+
+
+
+        # if percent_random is not None:
+        #     #so the other idea was learning a head that would taking uniform noise, gate how much to let through,
+        #     #and then choose how much to mix that noise with the policy
+        #     #it might be good, but for now lets keep it simple
+        #     noise = Variable(torch.from_numpy(np.random.dirichlet(
+        #         [1] * config.R * config.C, size=(state_out.size()[0],)).astype("float32")))
+        #     if config.CUDA:
+        #         noise = noise.cuda()
+        #     policy_out = policy_out * \
+        #         (1 - percent_random) + noise * percent_random
+
+        # if percent_random is not None:
+            
+        #so the other idea was learning a head that would taking uniform noise, gate how much to let through,
+        #and then choose how much to mix that noise with the policy
+        #it might be good, but for now lets keep it simple
+            # noise = Variable(torch.from_numpy(np.random.uniform(size=(state_out.size([0], config.R*config.C)).astype('float32'))))
+            # if config.CUDA:
+            #     noise = noise.cuda()
+            # policy_out = policy_out * \
+            #     (1 - percent_random) + noise * percent_random
 
         policy = policy_out
 
@@ -132,7 +174,7 @@ class QP(nn.Module):
 
 
 class ResBlock(nn.Module):
-    def __init__(self, in_dims, h_dims, out_dims=None):
+    def __init__(self, in_dims, h_dims, out_dims=None, head="normal"):
         super(ResBlock, self).__init__()
         self.conv1 = conv_layer(in_dims, h_dims)
         self.bn1 = nn.BatchNorm2d(h_dims)
@@ -160,7 +202,7 @@ class ResBlock(nn.Module):
 
 
 class QHead(nn.Module):
-    def __init__(self, in_dims, h_dims, out_dims=1):
+    def __init__(self, in_dims, h_dims, out_dims=1, head="normal"):
         super(QHead, self).__init__()
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
@@ -188,8 +230,9 @@ class QHead(nn.Module):
 
 
 class PolicyHead(nn.Module):
-    def __init__(self, in_dims, h_dims, out_dims=config.R*config.C):
+    def __init__(self, in_dims, h_dims, out_dims=config.R*config.C, head="normal"):
         super(PolicyHead, self).__init__()
+        self.head = head
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
 
@@ -204,7 +247,11 @@ class PolicyHead(nn.Module):
         x = self.relu(x)
 
         logits = self.lin(x.view(x.size()[0], -1))
+        if self.head is "relu-tanh":
+            #policy               
+            out = self.relu(self.tanh(logits))
+        else:    
+            #relu-gate
+            out = F.softmax(logits, dim=1)
 
-        policy = F.softmax(logits, dim=1)
-
-        return policy
+        return out
