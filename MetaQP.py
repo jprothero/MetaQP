@@ -105,8 +105,7 @@ class MetaQP:
                             if not is_done[i+k] and k != 0:
                                 is_done[i+k] = True
                                 is_done[i] = False
-                                minibatch[i] = np.array(
-                                    minibatch[i+k])
+                                minibatch[i] = minibatch[i+k]
                                 break
                         if bests_turn == best_starts:
                             results["best"] += 1
@@ -126,7 +125,7 @@ class MetaQP:
         states = []
         for i, state in enumerate(next_minibatch):
             if i % config.N_WAY == 0:
-                states.extend([np.array(state)])
+                states.extend([state])
 
         return states
 
@@ -138,7 +137,7 @@ class MetaQP:
         for task_idx in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
             if not episode_is_done[idx]:
                 task = {
-                    "state": np.array(states[task_idx]),
+                    "state": states[task_idx],
                     "starting_player": starting_player_list[task_idx],
                     "memories": []
                 }
@@ -219,7 +218,7 @@ class MetaQP:
             starting_player_list=starting_player_list,
             episode_is_done=episode_is_done)
 
-        minibatch_variable = self.wrap_to_variable(np.array(minibatch))
+        minibatch_variable = self.wrap_to_variable(minibatch)
 
         if bests_turn == 1:
             qp = self.best_qp
@@ -232,9 +231,9 @@ class MetaQP:
 
         corrected_policies = self.correct_policies(policies, minibatch)
 
-        corrected_policies_copy = np.array(corrected_policies)
+        # corrected_policies_copy = np.array(corrected_policies)
 
-        policies_input = self.wrap_to_variable(np.array(corrected_policies))
+        policies_input = self.wrap_to_variable(corrected_policies)
 
         qs, _ = qp(minibatch_variable, policies_input)
 
@@ -245,7 +244,7 @@ class MetaQP:
             for _ in range(config.N_WAY):
                 if not episode_is_done[idx]:
                     tasks[task_idx]["memories"].extend(
-                        [{"policy": np.array(corrected_policies[idx])}])
+                        [{"policy": corrected_policies[idx]}])
                 idx += 1
 
         scaled_qs = (qs + 1) / 2
@@ -263,7 +262,7 @@ class MetaQP:
                 summed_policy, minibatch[idx], mask=True)
 
             if tasks[task_idx] is not None:
-                tasks[task_idx]["improved_policy"] = np.array(improved_policy)
+                tasks[task_idx]["improved_policy"] = improved_policy
             for _ in range(config.N_WAY):
                 weighted_policies[idx] = improved_policy
                 idx += 1
@@ -284,20 +283,18 @@ class MetaQP:
                                                                          best_starts=best_starts,
                                                                          results=results)
 
-        next_states = self.get_states_from_next_minibatch(
-            np.array(next_minibatch))
+        next_states = self.get_states_from_next_minibatch(next_minibatch)
         # revert back to orig turn now that we are done
         bests_turn = (bests_turn+1) % 2
 
-        policies = corrected_policies_copy
+        policies = corrected_policies
 
         while num_done < config.EPISODE_BATCH_SIZE:
             # print(f"{num_done} done of {config.EPISODE_BATCH_SIZE}")
             minibatch, tasks, \
                 num_done, is_done, \
-                _, bests_turn = self.transition_and_evaluate_minibatch(minibatch=np.array(minibatch),
-                                                                       policies=np.array(
-                                                                           policies),
+                _, bests_turn = self.transition_and_evaluate_minibatch(minibatch=minibatch,
+                                                                       policies=policies,
                                                                        tasks=tasks,
                                                                        num_done=num_done,
                                                                        is_done=is_done,
@@ -305,7 +302,7 @@ class MetaQP:
                                                                        best_starts=best_starts,
                                                                        results=None)
 
-            minibatch_variable = self.wrap_to_variable(np.array(minibatch))
+            minibatch_variable = self.wrap_to_variable(minibatch)
 
             # when you fixed this use is_done to make a view of the minibatch_variable which will reduce the batch size going into
             # pytorch when you have some that are done, i.e. removing redundancy. perhaps put it in transition and evaluate with an option
@@ -342,7 +339,7 @@ class MetaQP:
             # print("Miniround: {} of {} done".format(num_done, config.TRAINING_BATCH_SHAPE))
 
         fixed_tasks = []
-        for i, task in enumerate(tasks):
+        for i_, task in enumerate(tasks):
             if task is not None:
                 fixed_tasks.extend([task])
 
