@@ -230,11 +230,11 @@ class MetaQP:
 
         policies = policies.detach().data.numpy()
 
-        policies = self.correct_policies(policies, minibatch)
+        corrected_policies = self.correct_policies(policies, minibatch)
 
-        policies_copy = np.array(policies)
+        corrected_policies_copy = np.array(corrected_policies)
 
-        policies_input = self.wrap_to_variable(np.array(policies))
+        policies_input = self.wrap_to_variable(np.array(corrected_policies))
 
         qs, _ = qp(minibatch_variable, policies_input)
 
@@ -245,11 +245,11 @@ class MetaQP:
             for _ in range(config.N_WAY):
                 if not episode_is_done[idx]:
                     tasks[task_idx]["memories"].extend(
-                        [{"policy": np.array(policies[idx])}])
+                        [{"policy": np.array(corrected_policies[idx])}])
                 idx += 1
 
         scaled_qs = (qs + 1) / 2
-        weighted_policies = policies * scaled_qs
+        weighted_policies = corrected_policies * scaled_qs
 
         idx = 0
         for task_idx in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
@@ -259,24 +259,24 @@ class MetaQP:
                 idx += 1
             idx -= config.N_WAY
 
-            corrected_policy = self.correct_policy(
+            improved_policy = self.correct_policy(
                 summed_policy, minibatch[idx], mask=True)
 
             if tasks[task_idx] is not None:
-                tasks[task_idx]["improved_policy"] = np.array(corrected_policy)
+                tasks[task_idx]["improved_policy"] = np.array(improved_policy)
             for _ in range(config.N_WAY):
-                weighted_policies[idx] = corrected_policy
+                weighted_policies[idx] = improved_policy
                 idx += 1
 
         is_done = deepcopy(episode_is_done)
         num_done = episode_num_done
 
-        corrected_policies = weighted_policies
+        improved_policies = weighted_policies
 
         next_minibatch, tasks, \
             episode_num_done, episode_is_done, \
             results, bests_turn = self.transition_and_evaluate_minibatch(minibatch=np.array(minibatch),
-                                                                         policies=corrected_policies,
+                                                                         policies=improved_policies,
                                                                          tasks=tasks,
                                                                          num_done=episode_num_done,
                                                                          is_done=episode_is_done,
@@ -289,7 +289,7 @@ class MetaQP:
         # revert back to orig turn now that we are done
         bests_turn = (bests_turn+1) % 2
 
-        policies = policies_copy
+        policies = corrected_policies_copy
 
         while num_done < config.EPISODE_BATCH_SIZE:
             # print(f"{num_done} done of {config.EPISODE_BATCH_SIZE}")
