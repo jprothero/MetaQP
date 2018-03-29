@@ -228,7 +228,7 @@ class MetaQP:
         else:
             qp = self.qp
 
-        _, policies = qp(minibatch_variable)
+        _, policies = qp(minibatch_variable, percent_random=.2)
 
         policies = policies.detach().data.numpy()
 
@@ -450,19 +450,20 @@ class MetaQP:
             self.q_optim.zero_grad()
             self.p_optim.zero_grad()
 
-            Q_loss = 0
-            policy_loss = 0
+            for _ in range(config.Q_UPDATES_PER):
+                Q_loss = 0
 
-            Qs, _ = self.qp(state_input, policies_input)
+                Qs, _ = self.qp(state_input, policies_input)
 
-            Q_loss += F.mse_loss(Qs, result_target)
+                Q_loss += F.mse_loss(Qs, result_target)*10
 
-            Q_loss.backward(torch.from_numpy(np.array([100]).astype("float32")))
+                Q_loss.backward()
 
-            self.q_optim.step()
+                self.q_optim.step()
 
-            self.q_optim.zero_grad()
+                self.q_optim.zero_grad()
             # self.p_optim.zero_grad() #should be redundant
+            policy_loss = 0
 
             Qs, policies = self.qp(state_input)
 
@@ -481,15 +482,15 @@ class MetaQP:
                 improved_policy = improved_policy.unsqueeze(0)
                 policy = policy.unsqueeze(-1)
                 improved_policy_loss += -torch.mm(improved_policy,
-                                                  torch.log(policy))
+                                                torch.log(policy))
 
-            # improved_policy_loss /= len(policies_smaller)
+            improved_policy_loss /= len(policies_smaller)
 
             Qs_smaller = Qs[policies_view]
 
             # policy_loss = corrected_policy_loss +
-            policy_loss = improved_policy_loss + \
-                F.mse_loss(Qs_smaller, optimal_value_var)
+            policy_loss = improved_policy_loss*5 #+ \
+                #F.mse_loss(Qs_smaller, optimal_value_var)*2
 
             #/ and * 2 to balance improved policies matching and regression
 
@@ -497,11 +498,11 @@ class MetaQP:
             # Qs, policies = self.qp(state_input)
             # policy_loss += F.mse_loss(Qs, optimal_value_var)
 
-            # policy_loss.backward()
+            policy_loss.backward()
             # policies.grad
             # set_trace()
 
-            # self.p_optim.step()
+            self.p_optim.step()
             p_loss = policy_loss.data.numpy()[0]
             q_loss = Q_loss.data.numpy()[0]
             self.history["q_loss"].extend([q_loss])

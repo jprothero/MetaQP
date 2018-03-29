@@ -9,13 +9,12 @@ from collections import OrderedDict
 
 
 def setup_optims(qp):
+    params = qp.state_dict()
+
+    state_params = qp.StateModule.parameters()
+    q_params = qp.Q.parameters()
+    p_params = qp.P.parameters()
     if config.OPTIM.lower() == "adam":
-        params = qp.state_dict()
-
-        state_params = qp.StateModule.parameters()
-        q_params = qp.Q.parameters()
-        p_params = qp.P.parameters()
-
         q_optim = optim.Adam([
             {"params": state_params}, {"params": q_params}
         ],
@@ -36,7 +35,8 @@ def setup_optims(qp):
             weight_decay=config.WEIGHT_DECAY)
 
         p_optim = optim.SGD([
-            {"params": state_params}, {"params": p_params}
+            # {"params": state_params}, 
+            {"params": p_params}
         ],
             lr=config.LR,
             momentum=config.MOMENTUM,
