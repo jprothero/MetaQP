@@ -80,6 +80,8 @@ class MetaQP:
                                           bests_turn, best_starts, results):
         task_idx = 0
         n_way_idx = 0
+        #map non_done minibatch indices to a smaller tensor
+        non_done_view = []
         for i, (state, policy) in enumerate(zip(minibatch, policies)):
             if i % config.N_WAY == 0 and i != 0:
                 task_idx += 1
@@ -116,10 +118,11 @@ class MetaQP:
                         curr_player = int(state[2][0][0])
                         if starting_player != curr_player:
                             reward *= -1
-
                         tasks[task_idx]["memories"][n_way_idx]["result"] = reward
+                else:
+                    non_done_view.extend([i])
 
-        return minibatch, tasks, num_done, is_done, results, bests_turn
+        return minibatch, tasks, num_done, is_done, results, bests_turn, non_done_view
 
     def get_states_from_next_minibatch(self, next_minibatch):
         states = []
@@ -242,9 +245,12 @@ class MetaQP:
         idx = 0
         for task_idx in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
             for _ in range(config.N_WAY):
+                #if tasks[task_idx] is not None:
                 if not episode_is_done[idx]:
                     tasks[task_idx]["memories"].extend(
                         [{"policy": corrected_policies[idx]}])
+                elif tasks[task_idx] is not None:
+                    tasks[task_idx]["memories"].extend([None])
                 idx += 1
 
         scaled_qs = (qs + 1) / 2
@@ -274,7 +280,7 @@ class MetaQP:
 
         next_minibatch, tasks, \
             episode_num_done, episode_is_done, \
-            results, bests_turn = self.transition_and_evaluate_minibatch(minibatch=np.array(minibatch),
+            results, bests_turn, non_done_view = self.transition_and_evaluate_minibatch(minibatch=np.array(minibatch),
                                                                          policies=improved_policies,
                                                                          tasks=tasks,
                                                                          num_done=episode_num_done,
@@ -289,20 +295,24 @@ class MetaQP:
 
         policies = corrected_policies
 
-        while num_done < config.EPISODE_BATCH_SIZE:
-            # print(f"{num_done} done of {config.EPISODE_BATCH_SIZE}")
+        while True:
             minibatch, tasks, \
                 num_done, is_done, \
-                _, bests_turn = self.transition_and_evaluate_minibatch(minibatch=minibatch,
-                                                                       policies=policies,
-                                                                       tasks=tasks,
-                                                                       num_done=num_done,
-                                                                       is_done=is_done,
-                                                                       bests_turn=bests_turn,
-                                                                       best_starts=best_starts,
-                                                                       results=None)
+                _, bests_turn, non_done_view = self.transition_and_evaluate_minibatch(minibatch=minibatch,
+                                                                    policies=policies,
+                                                                    tasks=tasks,
+                                                                    num_done=num_done,
+                                                                    is_done=is_done,
+                                                                    bests_turn=bests_turn,
+                                                                    best_starts=best_starts,
+                                                                    results=None)
 
-            minibatch_variable = self.wrap_to_variable(minibatch)
+            if num_done == config.EPISODE_BATCH_SIZE:
+                break
+            
+            minibatch_view = minibatch[non_done_view]
+
+            minibatch_view_variable = self.wrap_to_variable(minibatch_view)
 
             # when you fixed this use is_done to make a view of the minibatch_variable which will reduce the batch size going into
             # pytorch when you have some that are done, i.e. removing redundancy. perhaps put it in transition and evaluate with an option
@@ -331,16 +341,22 @@ class MetaQP:
 
             # another possible improvement is making the policy noise learnable, i.e.
             # the scale of the noise, and how much weight it has relative to the generated policy
-            _, policies = self.qp(minibatch_variable)
+            _, policies_view = self.qp(minibatch_view_variable)
 
-            policies = policies.detach().data.numpy()
+            policies_view = policies_view.detach().data.numpy()
 
-            policies = self.correct_policies(policies, minibatch)
-            # print("Miniround: {} of {} done".format(num_done, config.TRAINING_BATCH_SHAPE))
+            policies_view = self.correct_policies(policies_view, minibatch_view)
 
+            policies[non_done_view] = policies_view
         fixed_tasks = []
         for _, task in enumerate(tasks):
             if task is not None:
+                new_memories = []
+                for i, memory in enumerate(task["memories"]):
+                    if memory is not None:
+                        new_memories.extend([memory])
+
+                task["memories"] = new_memories
                 fixed_tasks.extend([task])
 
         self.memories.extend(fixed_tasks)
@@ -349,6 +365,9 @@ class MetaQP:
 
     def train_memories(self):
         self.qp.train()
+        self.qp.Q.train()
+        self.qp.P.train()
+        self.qp.StateModule.train()
 
         # so memories are a list of lists containing memories
         if len(self.memories) < config.MIN_TASK_MEMORIES:
@@ -358,7 +377,8 @@ class MetaQP:
 
         for _ in tqdm(range(config.TRAINING_LOOPS)):
             # tasks = sample(self.memories, config.SAMPLE_SIZE)
-            minibatch = sample(self.memories, config.TRAINING_BATCH_SIZE)
+            minibatch = sample(self.memories, 
+                min(config.TRAINING_BATCH_SIZE//config.N_WAY, len(self.memories)))
 
             # BATCH_SIZE = config.TRAINING_BATCH_SIZE // config.N_WAY
             # extra = config.SAMPLE_SIZE % BATCH_SIZE
@@ -398,11 +418,26 @@ class MetaQP:
             improved_policies_tensor[i] = task["improved_policy"]
 
             for memory in task["memories"]:
+                #note: as of right now the memories could be less that N_WAY
+                #so we are using partially zero tensors.
+                #this could be a major issue for thing like MSE error
                 result_tensor[idx] = memory["result"]
 
                 policies_tensor[idx] = memory["policy"]
                 batch_task_tensor[idx] = state
                 idx += 1
+
+        result_tensor = result_tensor[:idx]
+        policies_tensor = policies_tensor[:idx]
+        batch_task_tensor = batch_task_tensor[:idx]
+        improved_policies_tensor = improved_policies_tensor[:idx//config.N_WAY]
+        optimal_value_tensor = optimal_value_tensor[:idx//config.N_WAY]
+
+        policies_view = policies_view[:idx//config.N_WAY]        
+        #so lets say we have 20 tasks
+        #and we only have 80 memories
+        #we want the 80 to get the same transform
+        #so 80//config.N_WAY = 16
         state_input = self.wrap_to_variable(batch_task_tensor)
         policies_input = self.wrap_to_variable(policies_tensor)
         improved_policies_target = self.wrap_to_variable(
@@ -422,7 +457,7 @@ class MetaQP:
 
             Q_loss += F.mse_loss(Qs, result_target)
 
-            Q_loss.backward()
+            Q_loss.backward(torch.from_numpy(np.array([100]).astype("float32")))
 
             self.q_optim.step()
 
@@ -448,7 +483,7 @@ class MetaQP:
                 improved_policy_loss += -torch.mm(improved_policy,
                                                   torch.log(policy))
 
-            improved_policy_loss /= len(policies_smaller)
+            # improved_policy_loss /= len(policies_smaller)
 
             Qs_smaller = Qs[policies_view]
 
@@ -462,11 +497,11 @@ class MetaQP:
             # Qs, policies = self.qp(state_input)
             # policy_loss += F.mse_loss(Qs, optimal_value_var)
 
-            policy_loss.backward()
+            # policy_loss.backward()
             # policies.grad
             # set_trace()
 
-            self.p_optim.step()
+            # self.p_optim.step()
             p_loss = policy_loss.data.numpy()[0]
             q_loss = Q_loss.data.numpy()[0]
             self.history["q_loss"].extend([q_loss])
