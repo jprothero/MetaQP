@@ -17,6 +17,7 @@ from copy import deepcopy
 
 np.seterr(all="raise")
 
+
 class MetaQP:
     def __init__(self,
                  actions,
@@ -86,12 +87,13 @@ class MetaQP:
                 n_way_idx += 1
                 n_way_idx = n_way_idx % config.N_WAY
 
-            #this was causing this error
-            #the flipping of is done is f'ing something up
-            if not is_done[i]: #and tasks[task_idx] is not None:
+            # this was causing this error
+            # the flipping of is done is f'ing something up
+            if not is_done[i]:  # and tasks[task_idx] is not None:
                 action = np.random.choice(self.actions, p=policy)
 
-                state, reward, game_over = self.transition_and_evaluate(state, action)
+                state, reward, game_over = self.transition_and_evaluate(
+                    state, action)
 
                 bests_turn = (bests_turn+1) % 2
 
@@ -111,10 +113,7 @@ class MetaQP:
                         else:
                             results["new"] += 1
                     else:
-                        try:
-                            starting_player = tasks[task_idx]["starting_player"]
-                        except TypeError:
-                            set_trace()
+                        starting_player = tasks[task_idx]["starting_player"]
                         curr_player = int(state[2][0][0])
                         if starting_player != curr_player:
                             reward *= -1
@@ -134,7 +133,7 @@ class MetaQP:
     def setup_tasks(self, states, starting_player_list, episode_is_done):
         tasks = []
         minibatch = np.zeros((config.EPISODE_BATCH_SIZE,
-                                      config.CH, config.R, config.C))
+                              config.CH, config.R, config.C))
         idx = 0
         for task_idx in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
             if not episode_is_done[idx]:
@@ -145,7 +144,6 @@ class MetaQP:
                 }
                 tasks.extend([task])
             else:
-                set_trace()
                 tasks.extend([None])
 
             for _ in range(config.N_WAY):
@@ -217,10 +215,9 @@ class MetaQP:
         self.qp.eval()
         self.best_qp.eval()
         minibatch, tasks = self.setup_tasks(
-                                        states=states,
-                                        starting_player_list=starting_player_list,
-                                        episode_is_done=episode_is_done)
-
+            states=states,
+            starting_player_list=starting_player_list,
+            episode_is_done=episode_is_done)
 
         minibatch_variable = self.wrap_to_variable(np.array(minibatch))
 
@@ -244,17 +241,18 @@ class MetaQP:
         qs = qs.detach().data.numpy()
 
         idx = 0
-        for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
+        for task_idx in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
             for _ in range(config.N_WAY):
-                if not episode_is_done[i]:
-                    tasks[i]["memories"].extend([{"policy": np.array(policies[idx])}])
+                if not episode_is_done[idx]:
+                    tasks[task_idx]["memories"].extend(
+                        [{"policy": np.array(policies[idx])}])
                 idx += 1
 
         scaled_qs = (qs + 1) / 2
         weighted_policies = policies * scaled_qs
 
         idx = 0
-        for i in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
+        for task_idx in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
             summed_policy = 0
             for _ in range(config.N_WAY):
                 summed_policy += weighted_policies[idx]
@@ -264,14 +262,14 @@ class MetaQP:
             corrected_policy = self.correct_policy(
                 summed_policy, minibatch[idx], mask=True)
 
-            if tasks[i] is not None:
-                tasks[i]["improved_policy"] = np.array(corrected_policy)
+            if tasks[task_idx] is not None:
+                tasks[task_idx]["improved_policy"] = np.array(corrected_policy)
             for _ in range(config.N_WAY):
                 weighted_policies[idx] = corrected_policy
                 idx += 1
 
         is_done = deepcopy(episode_is_done)
-        num_done = episode_num_done        
+        num_done = episode_num_done
 
         corrected_policies = weighted_policies
 
@@ -286,64 +284,62 @@ class MetaQP:
                                                                          best_starts=best_starts,
                                                                          results=results)
 
-        next_states = self.get_states_from_next_minibatch(np.array(next_minibatch))
+        next_states = self.get_states_from_next_minibatch(
+            np.array(next_minibatch))
         # revert back to orig turn now that we are done
         bests_turn = (bests_turn+1) % 2
 
         policies = policies_copy
 
         while num_done < config.EPISODE_BATCH_SIZE:
-            try:
-                # print(f"{num_done} done of {config.EPISODE_BATCH_SIZE}")
-                minibatch, tasks, \
+            # print(f"{num_done} done of {config.EPISODE_BATCH_SIZE}")
+            minibatch, tasks, \
                 num_done, is_done, \
                 _, bests_turn = self.transition_and_evaluate_minibatch(minibatch=np.array(minibatch),
-                                                                            policies=np.array(policies),
-                                                                            tasks=tasks,
-                                                                            num_done=num_done,
-                                                                            is_done=is_done,
-                                                                            bests_turn=bests_turn,
-                                                                            best_starts=best_starts,
-                                                                            results=None)
+                                                                       policies=np.array(
+                                                                           policies),
+                                                                       tasks=tasks,
+                                                                       num_done=num_done,
+                                                                       is_done=is_done,
+                                                                       bests_turn=bests_turn,
+                                                                       best_starts=best_starts,
+                                                                       results=None)
 
-                minibatch_variable = self.wrap_to_variable(np.array(minibatch))
+            minibatch_variable = self.wrap_to_variable(np.array(minibatch))
 
-                #when you fixed this use is_done to make a view of the minibatch_variable which will reduce the batch size going into
-                #pytorch when you have some that are done, i.e. removing redundancy. perhaps put it in transition and evaluate with an option
+            # when you fixed this use is_done to make a view of the minibatch_variable which will reduce the batch size going into
+            # pytorch when you have some that are done, i.e. removing redundancy. perhaps put it in transition and evaluate with an option
 
-                if bests_turn == 1:
-                    qp = self.best_qp
-                else:
-                    qp = self.qp
+            if bests_turn == 1:
+                qp = self.best_qp
+            else:
+                qp = self.qp
 
-                # Idea: since I am going through a trajectory of states, I could probably
-                # also learn a value function and have the Q value for the original policy
-                # be a combination of the V and the reward. so basically we could use the V
-                # function in a couple different ways. for the main moves we could use it
-                # to scale the policies according to the V values from the transitioned states,
-                # i.e. for each of the transitioned states from the improved policies, we
-                # look at the V values from those, and scale the action probas according to those
-                # so basically we could rescale it to 0-1 and then multiply it with the policies
-                # and it should increase the probabilities for estimatedly good actions and
-                # decrease for bad ones
+            # Idea: since I am going through a trajectory of states, I could probably
+            # also learn a value function and have the Q value for the original policy
+            # be a combination of the V and the reward. so basically we could use the V
+            # function in a couple different ways. for the main moves we could use it
+            # to scale the policies according to the V values from the transitioned states,
+            # i.e. for each of the transitioned states from the improved policies, we
+            # look at the V values from those, and scale the action probas according to those
+            # so basically we could rescale it to 0-1 and then multiply it with the policies
+            # and it should increase the probabilities for estimatedly good actions and
+            # decrease for bad ones
 
-                # for the inner loop Q estimation trajectories we could average together the V
-                # values for each of the states, i.e. we could have an additional target
-                # for the Q network, which is the averaged together V values from the trajectory
-                # that should provide a fairly good estimate of the Q value, and won't be
-                # as noisy as the result
+            # for the inner loop Q estimation trajectories we could average together the V
+            # values for each of the states, i.e. we could have an additional target
+            # for the Q network, which is the averaged together V values from the trajectory
+            # that should provide a fairly good estimate of the Q value, and won't be
+            # as noisy as the result
 
-                # another possible improvement is making the policy noise learnable, i.e.
-                # the scale of the noise, and how much weight it has relative to the generated policy
-                _, policies = self.qp(minibatch_variable)
+            # another possible improvement is making the policy noise learnable, i.e.
+            # the scale of the noise, and how much weight it has relative to the generated policy
+            _, policies = self.qp(minibatch_variable)
 
-                policies = policies.detach().data.numpy()
+            policies = policies.detach().data.numpy()
 
-                policies = self.correct_policies(policies, minibatch)
-                # print("Miniround: {} of {} done".format(num_done, config.TRAINING_BATCH_SHAPE))
-            except KeyboardInterrupt:
-                #minibatch, is_done, policies
-                set_trace()
+            policies = self.correct_policies(policies, minibatch)
+            # print("Miniround: {} of {} done".format(num_done, config.TRAINING_BATCH_SHAPE))
 
         fixed_tasks = []
         for i, task in enumerate(tasks):

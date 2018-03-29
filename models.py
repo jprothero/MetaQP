@@ -81,19 +81,18 @@ class PolicyModule(nn.Module):
             PolicyHead,
             config.R * config.C)
 
-        #could also do a relu(tanh()) to get probability distribution
         self.noise_attention_head = make_layer(
             config.NUM_P_RES_FILTERS,
             config.NUM_P_RES_FILTERS,
             PolicyHead,
             config.R * config.C)
 
-        self.noise_gating_head = make_layer(
-            config.NUM_P_RES_FILTERS,
-            config.NUM_P_RES_FILTERS,
-            PolicyHead,
-            config.R * config.C,
-            head="relu_tanh")
+        # self.noise_gating_head = make_layer(
+        #     config.NUM_P_RES_FILTERS,
+        #     config.NUM_P_RES_FILTERS,
+        #     PolicyHead,
+        #     config.R * config.C,
+        #     head="relu_tanh")
 
     def forward(self, state_out, percent_random):
         p = self.p_res_inp(state_out)
@@ -103,7 +102,6 @@ class PolicyModule(nn.Module):
         #this might be ideal since we are mixing policies
         #consider adding in a relu(tanh()) head to control the magnitude of the mixing
         #why not add it now.
-        noise_gating = self.noise_gating_head(p)
         noise_attention = self.noise_attention_head(p)
   
         noise = Variable(torch.from_numpy(np.random.uniform(size=(state_out.size()[0], config.R*config.C)).astype('float32')))
@@ -111,8 +109,11 @@ class PolicyModule(nn.Module):
                 noise = noise.cuda()
 
         #consider removing one and seeing how it effects performance
-        noise = noise_gating*noise_attention*noise
-        policy_out = policy_out * (1 - noise) + noise
+
+        #so let me see. the attention sums to one, basically we are choosing what percentage
+        #of noise vs what percentage of real to keep, seems fine.
+        noise = noise_attention*noise
+        policy_out = policy_out * (1 - noise_attention) + noise*noise_attention
 
 
 
