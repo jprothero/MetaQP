@@ -339,7 +339,7 @@ class MetaQP:
             # print("Miniround: {} of {} done".format(num_done, config.TRAINING_BATCH_SHAPE))
 
         fixed_tasks = []
-        for i_, task in enumerate(tasks):
+        for _, task in enumerate(tasks):
             if task is not None:
                 fixed_tasks.extend([task])
 
