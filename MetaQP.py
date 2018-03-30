@@ -9,11 +9,14 @@ from copy import copy
 from random import shuffle, sample
 import numpy as np
 from IPython.core.debugger import set_trace
+from cyclic_lr import CyclicLR
 
 import config
 import utils
 import model_utils
 from copy import deepcopy
+
+import os
 
 np.seterr(all="raise")
 
@@ -28,20 +31,30 @@ class MetaQP:
         utils.create_folders()
 
         self.cuda = cuda
-        self.qp = model_utils.load_model()
+        self.Q = model_utils.load_Q()
+        self.P = model_utils.load_P()
+
         if self.cuda:
-            self.qp = self.qp.cuda()
+            self.Q = self.Q.cuda()
+            self.P = self.Q.cuda()            
 
         self.actions = actions
         self.get_legal_actions = get_legal_actions
         self.transition_and_evaluate = transition_and_evaluate
 
         if not best:
-            self.q_optim, self.p_optim = model_utils.setup_optims(self.qp)
-            self.best_qp = model_utils.load_model()
+            self.q_clr = CyclicLR(step=4*config.TRAINING_BATCH_SIZE)
+            self.p_clr = CyclicLR(step=4*config.TRAINING_BATCH_SIZE)
+
+            self.q_optim = model_utils.setup_optim(self.Q)
+            self.p_optim = model_utils.setup_optim(self.P)
+
+            self.best_Q = model_utils.load_Q()
+            self.best_P = model_utils.load_P()
 
             if self.cuda:
-                self.best_qp = self.best_qp.cuda()
+                self.best_Q = self.best_Q.cuda()
+                self.best_P = self.best_P.cuda()
 
             self.history = utils.load_history()
             self.memories = utils.load_memories()
@@ -200,22 +213,31 @@ class MetaQP:
         utils.save_memories(self.memories)
         print("Results: ", results)
         if results["new"] > results["best"] * config.SCORING_THRESHOLD:
-            model_utils.save_model(self.qp)
+            model_utils.save_Q(self.Q)
+            model_utils.save_P(self.P)
             print("Loading new best model")
-            self.best_qp = model_utils.load_model()
+            self.best_Q = model_utils.load_Q()
+            self.best_P = model_utils.load_P()
             if self.cuda:
-                self.best_qp = self.best_qp.cuda()
+                self.best_Q = self.best_Q.cuda()
+                self.best_P = self.best_P.cuda()
         elif results["best"] > results["new"] * config.SCORING_THRESHOLD:
             print("Reverting to previous best")
-            self.qp = model_utils.load_model()
+            self.Q = model_utils.load_Q()
+            self.P = model_utils.load_P()
             if self.cuda:
-                self.qp = self.qp.cuda()
-            self.q_optim, self.p_optim = model_utils.setup_optims(self.qp)
+                self.Q = self.Q.cuda()
+                self.P = self.P.cuda()
+            self.q_optim = model_utils.setup_Q_optim(self.Q)
+            self.p_optim = model_utils.setup_P_optim(self.P)
 
     def meta_self_play(self, states, episode_is_done, episode_num_done, bests_turn,
                        results, best_starts, starting_player_list):
-        self.qp.eval()
-        self.best_qp.eval()
+        self.Q.eval()
+        self.P.eval()
+        self.best_Q.eval()
+        self.best_P.eval()
+        
         minibatch, tasks = self.setup_tasks(
             states=states,
             starting_player_list=starting_player_list,
@@ -224,28 +246,27 @@ class MetaQP:
         minibatch_variable = self.wrap_to_variable(minibatch)
 
         if bests_turn == 1:
-            qp = self.best_qp
+            Q = self.best_Q
+            P = self.best_P
         else:
-            qp = self.qp
+            Q = self.Q
+            P = self.P
 
-        _, policies = qp(minibatch_variable, percent_random=.2)
+        policies = P(minibatch_variable, percent_random=.2)
 
         policies = policies.detach().data.numpy()
 
         corrected_policies = self.correct_policies(policies, minibatch)
 
-        # corrected_policies_copy = np.array(corrected_policies)
-
         policies_input = self.wrap_to_variable(corrected_policies)
 
-        qs, _ = qp(minibatch_variable, policies_input)
+        qs = Q(minibatch_variable, policies_input)
 
         qs = qs.detach().data.numpy()
 
         idx = 0
         for task_idx in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
             for _ in range(config.N_WAY):
-                #if tasks[task_idx] is not None:
                 if not episode_is_done[idx]:
                     tasks[task_idx]["memories"].extend(
                         [{"policy": corrected_policies[idx]}])
@@ -318,9 +339,11 @@ class MetaQP:
             # pytorch when you have some that are done, i.e. removing redundancy. perhaps put it in transition and evaluate with an option
 
             if bests_turn == 1:
-                qp = self.best_qp
+                Q = self.best_Q
+                P = self.best_P
             else:
-                qp = self.qp
+                Q = self.Q
+                P = self.P
 
             # Idea: since I am going through a trajectory of states, I could probably
             # also learn a value function and have the Q value for the original policy
@@ -341,7 +364,7 @@ class MetaQP:
 
             # another possible improvement is making the policy noise learnable, i.e.
             # the scale of the noise, and how much weight it has relative to the generated policy
-            _, policies_view = self.qp(minibatch_view_variable)
+            policies_view = self.P(minibatch_view_variable)
 
             policies_view = policies_view.detach().data.numpy()
 
@@ -363,48 +386,65 @@ class MetaQP:
 
         return next_states, episode_is_done, episode_num_done, results
 
-    def train_memories(self):
-        self.qp.train()
-        self.qp.Q.train()
-        self.qp.P.train()
-        self.qp.StateModule.train()
+    def train_Q(self, minibatch, epoch, epochs):
+        self.Q.train()
+        self.q_optim.zero_grad()   
 
-        # so memories are a list of lists containing memories
-        if len(self.memories) < config.MIN_TASK_MEMORIES:
-            print("Need {} tasks, have {}".format(
-                config.MIN_TASK_MEMORIES, len(self.memories)))
-            return
+        lr = self.q_clr.get_rate(epoch=epoch, num_epoches=epochs)
+        model_utils.adjust_learning_rate(self.q_optim, lr)
+        print("Q lr: {}".format(lr))     
 
-        for _ in tqdm(range(config.TRAINING_LOOPS)):
-            # tasks = sample(self.memories, config.SAMPLE_SIZE)
-            minibatch = sample(self.memories, 
-                min(config.TRAINING_BATCH_SIZE//config.N_WAY, len(self.memories)))
+        results_tensor = np.zeros((config.TRAINING_BATCH_SIZE, 1))
 
-            # BATCH_SIZE = config.TRAINING_BATCH_SIZE // config.N_WAY
-            # extra = config.SAMPLE_SIZE % BATCH_SIZE
-            # minibatches = [
-            #     tasks[x:x + BATCH_SIZE]
-            #     for x in range(0, len(tasks) - extra, BATCH_SIZE)
-            # ]
-            self.train_tasks(minibatch)
+        policies_tensor = np.zeros((
+            config.TRAINING_BATCH_SIZE, config.R * config.C))
 
-        utils.save_history(self.history)
-
-        # self.train_minibatches(minibatches)
-
-    def train_tasks(self, minibatch):
         batch_task_tensor = np.zeros((config.TRAINING_BATCH_SIZE,
                                       config.CH, config.R, config.C))
+
+        idx = 0
+        for i, task in enumerate(minibatch):
+            for memory in task["memories"]:
+                results_tensor[idx] = memory["result"]
+                policies_tensor[idx] = memory["policy"]
+                batch_task_tensor[idx] = task["state"]
+                idx += 1
+
+        state_input = self.wrap_to_variable(batch_task_tensor)
+        policies_input = self.wrap_to_variable(policies_tensor)
+        results_target = self.wrap_to_variable(results_tensor)
+
+        Qs = self.Q(state_input, policies_input)
+
+        Q_loss = F.mse_loss(Qs, results_target)
+
+        Q_loss.backward()
+
+        self.q_optim.step()
+
+        return Q_loss.data.numpy()[0]
+
+    def train_P(self, minibatch, epoch, epochs):
+        self.P.train()
+        self.p_optim.zero_grad()
+
+        lr = self.p_clr.get_rate(epoch=epoch, num_epoches=epochs)
+        model_utils.adjust_learning_rate(self.q_optim, lr)
+        print("P lr: {}".format(lr))    
+
+        batch_task_tensor = np.zeros((config.TRAINING_BATCH_SIZE,
+                                      config.CH, config.R, config.C))
+
+        idx = 0
+        for i, task in enumerate(minibatch):
+            for memory in task["memories"]:
+                batch_task_tensor[idx] = task["state"]
+                idx += 1
 
         policies_view = []
         for i in range(config.TRAINING_BATCH_SIZE):
             if i % config.N_WAY == 0:
                 policies_view.extend([i])
-
-        result_tensor = np.zeros((config.TRAINING_BATCH_SIZE, 1))
-
-        policies_tensor = np.zeros((
-            config.TRAINING_BATCH_SIZE, config.R * config.C))
 
         improved_policies_tensor = np.zeros((
             config.TRAINING_BATCH_SIZE//config.N_WAY, config.R * config.C))
@@ -412,102 +452,99 @@ class MetaQP:
         optimal_value_tensor = np.ones(
             (config.TRAINING_BATCH_SIZE//config.N_WAY, 1))
 
-        idx = 0
-        for i, task in enumerate(minibatch):
-            state = task["state"]
-            improved_policies_tensor[i] = task["improved_policy"]
+        state_input = self.wrap_to_variable(batch_task_tensor) 
+        improved_policies_target = self.wrap_to_variable(improved_policies_tensor)   
+        optimal_value_target = self.wrap_to_variable(optimal_value_tensor)    
 
-            for memory in task["memories"]:
-                #note: as of right now the memories could be less that N_WAY
-                #so we are using partially zero tensors.
-                #this could be a major issue for thing like MSE error
-                result_tensor[idx] = memory["result"]
+        policies = self.P(state_input)
+        Qs = self.Q(state_input, policies)
 
-                policies_tensor[idx] = memory["policy"]
-                batch_task_tensor[idx] = state
-                idx += 1
+        policies_smaller = policies[policies_view]
 
-        result_tensor = result_tensor[:idx]
-        policies_tensor = policies_tensor[:idx]
-        batch_task_tensor = batch_task_tensor[:idx]
-        improved_policies_tensor = improved_policies_tensor[:idx//config.N_WAY]
-        optimal_value_tensor = optimal_value_tensor[:idx//config.N_WAY]
+        improved_policy_loss = 0
+        for improved_policy, policy in zip(improved_policies_target, policies_smaller):
+            improved_policy = improved_policy.unsqueeze(0)
+            policy = policy.unsqueeze(-1)
+            improved_policy_loss += -torch.mm(improved_policy,
+                                            torch.log(policy))
 
-        policies_view = policies_view[:idx//config.N_WAY]        
-        #so lets say we have 20 tasks
-        #and we only have 80 memories
-        #we want the 80 to get the same transform
-        #so 80//config.N_WAY = 16
-        state_input = self.wrap_to_variable(batch_task_tensor)
-        policies_input = self.wrap_to_variable(policies_tensor)
-        improved_policies_target = self.wrap_to_variable(
-            improved_policies_tensor)
-        result_target = self.wrap_to_variable(result_tensor)
+        improved_policy_loss /= len(policies_smaller)
 
-        optimal_value_var = self.wrap_to_variable(optimal_value_tensor)
+        Qs_smaller = Qs[policies_view]
 
-        for e in range(config.EPOCHS):
-            self.q_optim.zero_grad()
-            self.p_optim.zero_grad()
+        policy_loss = improved_policy_loss + \
+            F.mse_loss(Qs_smaller, optimal_value_target)
 
-            for _ in range(config.Q_UPDATES_PER):
-                Q_loss = 0
+        policy_loss.backward()
 
-                Qs, _ = self.qp(state_input, policies_input)
+        self.p_optim.step()
 
-                Q_loss += F.mse_loss(Qs, result_target)*10
+        return policy_loss.data.numpy()[0]
 
-                Q_loss.backward()
+    def train(self,
+        epochs=config.EPOCHS,
+        training_loops=config.TRAINING_LOOPS):
 
-                self.q_optim.step()
+        #updates q and p _clr with a new lr
+        self.find_lr(self.Q, self.q_optim, "Q")
+        self.find_lr(self.P, self.p_optim, "P")
 
-                self.q_optim.zero_grad()
-            # self.p_optim.zero_grad() #should be redundant
-            policy_loss = 0
+        num_batches = config.TRAINING_BATCH_SIZE//config.N_WAY
 
-            Qs, policies = self.qp(state_input)
+        for _ in range(training_loops):
+            minibatch = sample(self.memories, min(num_batches, len(self.memories)))
 
-            # corrected_policy_loss = 0
-            # for corrected_policy, policy in zip(policies_input, policies):
-            #     corrected_policy = corrected_policy.unsqueeze(0)
-            #     policy = policy.unsqueeze(-1)
-            #     corrected_policy_loss += -torch.mm(corrected_policy,
-            #                                         torch.log(policy))
-            # corrected_policy_loss /= 3*len(policies_input)
+            for e in range(epochs):
+                self.history["Q"].extend([self.train_Q(minibatch, e, epochs)])
+                self.history["P"].extend([self.train_P(minibatch, e, epochs)])
 
-            policies_smaller = policies[policies_view]
+        utils.save_history(self.history)
 
-            improved_policy_loss = 0
-            for improved_policy, policy in zip(improved_policies_target, policies_smaller):
-                improved_policy = improved_policy.unsqueeze(0)
-                policy = policy.unsqueeze(-1)
-                improved_policy_loss += -torch.mm(improved_policy,
-                                                torch.log(policy))
+    def find_lr(self, model, optim, name, starting_max_lr=1e-5):
+        model_utils.save_temp(model, name)
+        
+        loss = 1e8
+        last_loss = 1e9
 
-            improved_policy_loss /= len(policies_smaller)
+        lr = starting_max_lr
+        num_batches = config.TRAINING_BATCH_SIZE//config.N_WAY
 
-            Qs_smaller = Qs[policies_view]
+        minibatch = sample(self.memories, min(num_batches, len(self.memories)))        
 
-            # policy_loss = corrected_policy_loss +
-            policy_loss = improved_policy_loss*5 #+ \
-                #F.mse_loss(Qs_smaller, optimal_value_var)*2
+        e = 1
+        while loss < last_loss:
+            last_loss = loss
+            last_lr = lr
+            #get the last num_batches batches
 
-            #/ and * 2 to balance improved policies matching and regression
+            if name is "Q":
+                self.Q = model_utils.load_temp(name)
+                self.q_optim = model_utils.setup_Q_optim(self.Q)
+                self.Q.train()
+                self.q_clr = CyclicLR(base_lr = lr/4, max_lr=lr, step=4*config.TRAINING_BATCH_SIZE) 
+                
+                loss = self.train_Q(minibatch, epoch = e, epochs=1)      
+            elif name is "P":
+                self.P = model_utils.load_temp(name)
+                self.p_optim = model_utils.setup_P_optim(self.P)
+                self.P.train()
+                self.p_clr = CyclicLR(base_lr = lr/4, max_lr=lr, step=4*config.TRAINING_BATCH_SIZE) 
+                
+                loss = self.train_P(minibatch, epoch = e, epochs=1)   
+            else:
+                raise "Model name is wrong"
 
-            # for _ in range(config.TRAINING_BATCH_SIZE):
-            # Qs, policies = self.qp(state_input)
-            # policy_loss += F.mse_loss(Qs, optimal_value_var)
+            lr *= 3
 
-            policy_loss.backward()
-            # policies.grad
-            # set_trace()
+        lr /= 3
 
-            self.p_optim.step()
-            p_loss = policy_loss.data.numpy()[0]
-            q_loss = Q_loss.data.numpy()[0]
-            self.history["q_loss"].extend([q_loss])
-            self.history["p_loss"].extend([p_loss])
-
-            if e == (config.EPOCHS-1):
-                print("Policy loss {}".format(policy_loss.data.numpy()[0]))
-                print("Q loss: {}".format(Q_loss.data.numpy()[0]))
+        if name is "Q":
+            self.Q = model_utils.load_temp(name)
+            self.q_optim = model_utils.setup_Q_optim(self.Q)
+            self.q_clr = CyclicLR(base_lr = lr/4, max_lr=lr, 
+                step=4*config.TRAINING_BATCH_SIZE)
+        else:
+            self.P = model_utils.load_temp(name)
+            self.p_optim = model_utils.setup_P_optim(self.P)
+            self.p_clr = CyclicLR(base_lr = lr/4, max_lr=lr, 
+                step=4*config.TRAINING_BATCH_SIZE)

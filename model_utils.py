@@ -1,58 +1,59 @@
 import torch.optim as optim
 import torch
 
-from models import QP
+from models import Q, P
 import config
 
 from IPython.core.debugger import set_trace
 from collections import OrderedDict
 
+import os
 
-def setup_optims(qp):
-    params = qp.state_dict()
+def setup_Q_optim(Q):
+    q_optim = optim.SGD(Q.parameters(),
+        lr=config.LR,
+        momentum=config.MOMENTUM,
+        weight_decay=config.WEIGHT_DECAY)
+    
+    return q_optim
 
-    state_params = qp.StateModule.parameters()
-    q_params = qp.Q.parameters()
-    p_params = qp.P.parameters()
-    if config.OPTIM.lower() == "adam":
-        q_optim = optim.Adam([
-            {"params": state_params}, {"params": q_params}
-        ],
-            lr=config.LR,
-            weight_decay=config.WEIGHT_DECAY)
+def setup_P_optim(P):
+    p_optim = optim.SGD(P.parameters(),
+        lr=config.LR,
+        momentum=config.MOMENTUM,
+        weight_decay=config.WEIGHT_DECAY)
+    
+    return p_optim
 
-        p_optim = optim.Adam([
-            {"params": state_params}, {"params": p_params}
-        ],
-            lr=config.LR,
-            weight_decay=config.WEIGHT_DECAY)
-    else:
-        q_optim = optim.SGD([
-            {"params": state_params}, {"params": q_params}
-        ],
-            lr=config.LR,
-            momentum=config.MOMENTUM,
-            weight_decay=config.WEIGHT_DECAY)
-
-        p_optim = optim.SGD([
-            # {"params": state_params}, 
-            {"params": p_params}
-        ],
-            lr=config.LR,
-            momentum=config.MOMENTUM,
-            weight_decay=config.WEIGHT_DECAY)
-
-    return q_optim, p_optim
-
-
-def load_model(name="qp"):
+def load_Q():
     try:
-        return torch.load('checkpoints/models/%s_best.t7' % name)
+        return torch.load('checkpoints/models/Q_best.t7')
     except:
-        print('Initialize new Network Weights for %s_best' % name)
-        return QP()
+        print('Initialize new Network Weights for Q')
+        return Q()
 
+def load_P():
+    try:
+        return torch.load('checkpoints/models/P_best.t7')
+    except:
+        print('Initialize new Network Weights for P')
+        return P()
 
-def save_model(qp, name="qp"):
-    print("Saving best model")
-    torch.save(qp, "checkpoints/models/%s_best.t7" % name)
+def save_Q(Q):
+    print("Saving best Q")
+    torch.save(Q, "checkpoints/models/Q_best.t7")
+
+def save_P(P):
+    print("Saving best P")
+    torch.save(P, "checkpoints/models/P_best.t7")
+
+def save_temp(model, name):
+    os.makedirs("temp", exist_ok=True)
+    torch.save(model, "temp/{}_temp.t7".format(name))
+
+def load_temp(name):
+    return torch.load("temp/{}_temp.t7".format(name))
+
+def adjust_learning_rate(optimizer, lr):
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr

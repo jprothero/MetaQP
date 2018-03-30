@@ -1,5 +1,7 @@
 import os
 import torch
+from fastai.sgdr import *
+from fastai.layer_optimizer import *
 
 def save_temp(model):
     os.makedirs("temp", exists_ok=True)
@@ -36,11 +38,23 @@ def lr_find(self, model, start_lr=1e-5, end_lr=10, wds=None, linear=False):
         #save the temporary model
         save_temp(model)
 
-        layer_opt = self.get_layer_opt(start_lr, wds)
-        
-        self.sched = LR_Finder(layer_opt, len(self.data.trn_dl), end_lr, linear=linear)
-        self.fit_gen(self.model, self.data, layer_opt, 1)
+        #so layer optimizer takes the modules
+        #may need to specify one for each part of the model, i.e. one for policy, one for Q
+        layer_opt = LayerOptimizer(opt_fn, [model.modules], [start_lr], wds)
 
-        loaded_model = load_temp()        
+        self.sched = LR_Finder(layer_opt, config.EPOCHS, end_lr, linear=linear)
+        #do training, during that call the self.sched. stuff
+        self.train_memories()
 
-        self.sched = LR_Finder(layer_opt, len(self.data.trn_dl), end_lr, linear=linear)
+        model = load_temp()
+
+        self.sched.on_train_begin()
+
+        self.sched.on_batch_begin()
+        metrics = [loss.data.numpy()[0], valid_loss.data.numpy()[0]]
+        self.sched.on_epoch_end(metrics)
+
+        metrics = [loss.data.numpy()[0], valid_loss.data.numpy()[0]]        
+        self.sched.on_batch_end(self, metrics)
+
+        self.sched.on_train_end()

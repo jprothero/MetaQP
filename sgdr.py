@@ -1,8 +1,10 @@
-# from .imports import *
-from .layer_optimizer import *
 import copy
 import time
 import numpy as np
+import math
+from matplotlib.pyplot import plot as plt
+import torch
+
 
 class Callback:
     def on_train_begin(self): pass
@@ -19,6 +21,8 @@ class Callback:
 #
 # Usage:
 # learn.fit(0.01, 1, callbacks = [LoggingCallback(save_path="/tmp/log")])
+
+
 class LossRecorder(Callback):
     def __init__(self, layer_opt, save_path=''):
         super().__init__()
@@ -40,6 +44,7 @@ class LossRecorder(Callback):
         self.iterations.append(self.iteration)
         self.losses.append(loss)
 
+
 class LR_Updater(LossRecorder):
     def on_train_begin(self):
         super().on_train_begin()
@@ -59,9 +64,9 @@ class LR_Updater(LossRecorder):
 
 
 class LR_Finder(LR_Updater):
-    def __init__(self, lr, nb, end_lr=10, linear=False):
+    def __init__(self, layer_opt, nb, end_lr=10, linear=False):
         self.linear = linear
-        ratio = end_lr/lr
+        ratio = end_lr/layer_opt.lr
         self.lr_mult = (ratio/nb) if linear else ratio**(1/nb)
         super().__init__(layer_opt)
 
