@@ -17,8 +17,10 @@ iteration = 0
 metaqp = MetaQP(actions=actions, get_legal_actions=get_legal_actions,
     transition_and_evaluate=transition_and_evaluate, cuda=False)
 
+metaqp.find_lrs()
+
 while True:
-    metaqp.train_memories(find_lr=True)
+    metaqp.train()
     metaqp.run_episode(root_state)
 
     iteration += 1

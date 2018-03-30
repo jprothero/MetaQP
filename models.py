@@ -34,9 +34,9 @@ class StateModule(nn.Module):
         self.state_res3 = make_layer(config.NUM_STATE_RES_FILTERS,
                                      config.NUM_STATE_RES_FILTERS,
                                      ResBlock)
-        self.state_res4 = make_layer(config.NUM_STATE_RES_FILTERS,
-                                     config.NUM_STATE_RES_FILTERS,
-                                     ResBlock)
+        # self.state_res4 = make_layer(config.NUM_STATE_RES_FILTERS,
+        #                              config.NUM_STATE_RES_FILTERS,
+        #                              ResBlock)
         self.state_res_out = make_layer(config.NUM_STATE_RES_FILTERS,
                                         config.NUM_STATE_RES_FILTERS,
                                         ResBlock)
@@ -46,7 +46,7 @@ class StateModule(nn.Module):
         s = self.state_res1(s)
         s = self.state_res2(s)
         s = self.state_res3(s)
-        s = self.state_res4(s)
+        # s = self.state_res4(s)
 
         state_out = self.state_res_out(s)
 
@@ -109,7 +109,7 @@ class Q(nn.Module):
 
         Q = self.Q(q_input)
 
-        return Q, policy
+        return Q
 
 class QModule(nn.Module):
     def __init__(self):
@@ -123,9 +123,9 @@ class QModule(nn.Module):
         self.q_res2 = make_layer(config.NUM_Q_RES_FILTERS,
                                  config.NUM_Q_RES_FILTERS,
                                  ResBlock)
-        self.q_res3 = make_layer(config.NUM_Q_RES_FILTERS,
-                                 config.NUM_Q_RES_FILTERS,
-                                 ResBlock)
+        # self.q_res3 = make_layer(config.NUM_Q_RES_FILTERS,
+        #                          config.NUM_Q_RES_FILTERS,
+        #                          ResBlock)
         self.q_res_out = make_layer(config.NUM_Q_RES_FILTERS,
                                     config.NUM_Q_RES_FILTERS,
                                     QHead,
@@ -135,7 +135,7 @@ class QModule(nn.Module):
         q = self.q_res_inp(q_input)
         q = self.q_res1(q)
         q = self.q_res2(q)
-        q = self.q_res3(q)
+        # q = self.q_res3(q)
         Q = self.q_res_out(q)
 
         return Q
@@ -162,15 +162,15 @@ class PolicyModule(nn.Module):
             config.NUM_P_RES_FILTERS,
             ResBlock)
 
-        self.p_res4 = make_layer(
-            config.NUM_P_RES_FILTERS,
-            config.NUM_P_RES_FILTERS,
-            ResBlock)
+        # self.p_res4 = make_layer(
+        #     config.NUM_P_RES_FILTERS,
+        #     config.NUM_P_RES_FILTERS,
+        #     ResBlock)
 
-        self.p_res5 = make_layer(
-            config.NUM_P_RES_FILTERS,
-            config.NUM_P_RES_FILTERS,
-            ResBlock)
+        # self.p_res5 = make_layer(
+        #     config.NUM_P_RES_FILTERS,
+        #     config.NUM_P_RES_FILTERS,
+        #     ResBlock)
 
         self.p_res_out = make_layer(
             config.NUM_P_RES_FILTERS,
@@ -196,8 +196,8 @@ class PolicyModule(nn.Module):
         p = self.p_res1(p)
         p = self.p_res2(p)
         p = self.p_res3(p)
-        p = self.p_res4(p)
-        p = self.p_res5(p)
+        # p = self.p_res4(p)
+        # p = self.p_res5(p)
         policy_out = self.p_res_out(p)
         # this will in effect choose one of the policies to be random.
         # this might be ideal since we are mixing policies
@@ -228,8 +228,8 @@ class PolicyModule(nn.Module):
         #         (1 - percent_random) + noise * percent_random
 
         if percent_random is not None:
-            noise = Variable(torch.from_numpy(np.random.uniform(size=(state_out.size()[0],
-                                                                      config.R*config.C)).astype('float32')))
+            noise = Variable(torch.from_numpy(np.random.dirichlet(
+                [1] * config.R * config.C, size=(state_out.size()[0],)).astype("float32")))
             if config.CUDA:
                 noise = noise.cuda()
             policy_out = policy_out * \
@@ -238,37 +238,6 @@ class PolicyModule(nn.Module):
         policy = policy_out
 
         return policy
-
-
-class QP(nn.Module):
-    def __init__(self):
-        super(QP, self).__init__()
-        self.StateModule = StateModule()
-        self.Q = QModule()
-        self.P = PolicyModule()
-
-    def forward(self, state, policy=None, percent_random=None):
-        state_out = self.StateModule(state)
-
-        if policy is None:
-            policy = self.P(state_out, percent_random)
-        policy_view = policy.view(state.size()[0], 1, config.R, config.C)
-        #state_out = state_out.permute(1, 0, 2, 3)
-
-        q_input = torch.cat((state_out, policy_view), dim=1)
-
-        #q_input = q_input.permute(1, 0, 2, 3)
-
-        Q = self.Q(q_input)
-
-        # might need this view
-        # policy_view = policy.view(1, config.BATCH_SIZE, config.R, config.C)
-        # Q_input = torch.cat((x.view(self.num_filters, config.BATCH_SIZE, config.R, config.C),
-        #     policy_view), axis=0)
-        # Q = self.Q(Q_input.view(config.BATCH_SIZE, -1))
-
-        return Q, policy
-
 
 class ResBlock(nn.Module):
     def __init__(self, in_dims, h_dims, out_dims=None, head="normal"):

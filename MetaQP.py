@@ -46,8 +46,8 @@ class MetaQP:
             self.q_clr = CyclicLR(step=4*config.TRAINING_BATCH_SIZE)
             self.p_clr = CyclicLR(step=4*config.TRAINING_BATCH_SIZE)
 
-            self.q_optim = model_utils.setup_optim(self.Q)
-            self.p_optim = model_utils.setup_optim(self.P)
+            self.q_optim = model_utils.setup_P_optim(self.Q)
+            self.p_optim = model_utils.setup_Q_optim(self.P)
 
             self.best_Q = model_utils.load_Q()
             self.best_P = model_utils.load_P()
@@ -386,13 +386,13 @@ class MetaQP:
 
         return next_states, episode_is_done, episode_num_done, results
 
-    def train_Q(self, minibatch, epoch, epochs):
+    def train_Q(self, minibatch, iter, iterations):
         self.Q.train()
         self.q_optim.zero_grad()   
 
-        lr = self.q_clr.get_rate(epoch=epoch, num_epoches=epochs)
+        lr = self.q_clr.get_rate(epoch=iter, num_epoches=iterations)
         model_utils.adjust_learning_rate(self.q_optim, lr)
-        print("Q lr: {}".format(lr))     
+        # print("Q lr: {}".format(lr))     
 
         results_tensor = np.zeros((config.TRAINING_BATCH_SIZE, 1))
 
@@ -424,13 +424,13 @@ class MetaQP:
 
         return Q_loss.data.numpy()[0]
 
-    def train_P(self, minibatch, epoch, epochs):
+    def train_P(self, minibatch, iter, iterations):
         self.P.train()
         self.p_optim.zero_grad()
 
-        lr = self.p_clr.get_rate(epoch=epoch, num_epoches=epochs)
+        lr = self.p_clr.get_rate(epoch=iter, num_epoches=iterations)
         model_utils.adjust_learning_rate(self.q_optim, lr)
-        print("P lr: {}".format(lr))    
+        # print("P lr: {}".format(lr))    
 
         batch_task_tensor = np.zeros((config.TRAINING_BATCH_SIZE,
                                       config.CH, config.R, config.C))
@@ -484,23 +484,27 @@ class MetaQP:
     def train(self,
         epochs=config.EPOCHS,
         training_loops=config.TRAINING_LOOPS):
-
-        #updates q and p _clr with a new lr
-        self.find_lr(self.Q, self.q_optim, "Q")
-        self.find_lr(self.P, self.p_optim, "P")
-
+        if (len(self.memories) < config.MIN_TASK_MEMORIES):
+            return
         num_batches = config.TRAINING_BATCH_SIZE//config.N_WAY
 
-        for _ in range(training_loops):
+        iterations = epochs*training_loops
+
+        idx = 0
+        for i in range(training_loops):
             minibatch = sample(self.memories, min(num_batches, len(self.memories)))
 
             for e in range(epochs):
-                self.history["Q"].extend([self.train_Q(minibatch, e, epochs)])
-                self.history["P"].extend([self.train_P(minibatch, e, epochs)])
+                self.history["Q"].extend([self.train_Q(minibatch, idx, iterations)])
+                self.history["P"].extend([self.train_P(minibatch, idx, iterations)])
+
+            print("Q_loss: {}".format(self.history["Q"][-1]), 
+            "P_loss: {}".format(self.history["P"][-1][0]))
 
         utils.save_history(self.history)
 
-    def find_lr(self, model, optim, name, starting_max_lr=1e-5):
+    def find_lr(self, model, optim, name, starting_max_lr=.001):
+        print("Finding {} lr".format(name))
         model_utils.save_temp(model, name)
         
         loss = 1e8
@@ -509,42 +513,71 @@ class MetaQP:
         lr = starting_max_lr
         num_batches = config.TRAINING_BATCH_SIZE//config.N_WAY
 
-        minibatch = sample(self.memories, min(num_batches, len(self.memories)))        
+        minibatches = [sample(self.memories, min(num_batches, len(self.memories))) for _ 
+         in range(config.TRAINING_LOOPS)]
 
-        e = 1
+        step_size = config.TRAINING_LOOPS*config.EPOCHS/2
+        iterations = config.TRAINING_LOOPS*config.EPOCHS
+
+        # if name is "P":
+            # lr /= 100
+
+        e = 0
         while loss < last_loss:
+            summed_loss = 0
             last_loss = loss
             last_lr = lr
+            print(name, lr)
             #get the last num_batches batches
 
             if name is "Q":
                 self.Q = model_utils.load_temp(name)
                 self.q_optim = model_utils.setup_Q_optim(self.Q)
                 self.Q.train()
-                self.q_clr = CyclicLR(base_lr = lr/4, max_lr=lr, step=4*config.TRAINING_BATCH_SIZE) 
-                
-                loss = self.train_Q(minibatch, epoch = e, epochs=1)      
+                self.q_clr = CyclicLR(base_lr = lr/4, max_lr=lr, step=step_size) 
+
+                idx = 0
+                for i in range(config.TRAINING_LOOPS):
+                    minibatch = minibatches[i]
+
+                    for _ in range(config.EPOCHS):
+                        summed_loss += self.train_Q(minibatch, iter = idx, 
+                            iterations=iterations)
+                        idx += 1
+                         
             elif name is "P":
                 self.P = model_utils.load_temp(name)
                 self.p_optim = model_utils.setup_P_optim(self.P)
                 self.P.train()
-                self.p_clr = CyclicLR(base_lr = lr/4, max_lr=lr, step=4*config.TRAINING_BATCH_SIZE) 
+                self.p_clr = CyclicLR(base_lr = lr/4, max_lr=lr, step=step_size) 
                 
-                loss = self.train_P(minibatch, epoch = e, epochs=1)   
+                idx = 0
+                for i in range(config.TRAINING_LOOPS):
+                    minibatch = minibatches[i]
+
+                    for e in range(config.EPOCHS):
+                        summed_loss += self.train_P(minibatch, iter = idx, 
+                        iterations=iterations)
             else:
                 raise "Model name is wrong"
 
             lr *= 3
-
-        lr /= 3
+            loss = summed_loss/(config.TRAINING_LOOPS*config.EPOCHS)
+        # last_lr /= 3
 
         if name is "Q":
             self.Q = model_utils.load_temp(name)
             self.q_optim = model_utils.setup_Q_optim(self.Q)
-            self.q_clr = CyclicLR(base_lr = lr/4, max_lr=lr, 
-                step=4*config.TRAINING_BATCH_SIZE)
+            self.q_clr = CyclicLR(base_lr = last_lr/4, max_lr=last_lr, 
+                step=step_size)
         else:
             self.P = model_utils.load_temp(name)
             self.p_optim = model_utils.setup_P_optim(self.P)
-            self.p_clr = CyclicLR(base_lr = lr/4, max_lr=lr, 
-                step=4*config.TRAINING_BATCH_SIZE)
+            self.p_clr = CyclicLR(base_lr = last_lr/4, max_lr=last_lr, 
+                step=step_size)
+
+    def find_lrs(self):
+        if len(self.memories) < config.MIN_TASK_MEMORIES:
+            return
+        self.find_lr(self.Q, self.q_optim, "Q")
+        self.find_lr(self.P, self.p_optim, "P")

@@ -27,7 +27,7 @@ def load_history():
         print("Loss history not found, starting new history.")
 
         history = {
-            "q_loss": [], "p_loss": []
+            "Q": [], "P": []
         }
 
     return history

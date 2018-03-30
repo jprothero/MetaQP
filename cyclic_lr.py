@@ -1,3 +1,5 @@
+import numpy as np
+
 class CyclicLR():
     def __init__(self, base_lr=0.001, max_lr=0.006, step=2000., mode='triangular',
                     gamma=1., scale_fn=None, scale_mode='cycle'):
