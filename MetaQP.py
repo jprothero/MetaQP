@@ -209,6 +209,7 @@ class MetaQP:
             bests_turn = (bests_turn+1) % 2
 
         if len(self.memories) > config.MAX_TASK_MEMORIES:
+            set_trace()
             self.memories[-config.MAX_TASK_MEMORIES:]
         utils.save_memories(self.memories)
         print("Results: ", results)
@@ -252,7 +253,7 @@ class MetaQP:
             Q = self.Q
             P = self.P
 
-        policies = P(minibatch_variable, percent_random=.2)
+        policies = P(minibatch_variable, percent_random=1.0)
 
         policies = policies.detach().data.numpy()
 
@@ -386,13 +387,13 @@ class MetaQP:
 
         return next_states, episode_is_done, episode_num_done, results
 
-    def train_Q(self, minibatch, iter, iterations):
+    def train_Q(self, minibatch):
         self.Q.train()
         self.P.train()
         self.q_optim.zero_grad()   
         self.p_optim.zero_grad()        
 
-        lr = self.q_clr.get_rate(epoch=iter, num_epoches=iterations)
+        lr = self.q_clr.get_rate()
         model_utils.adjust_learning_rate(self.q_optim, lr)
         # print("Q lr: {}".format(lr))     
 
@@ -405,7 +406,7 @@ class MetaQP:
                                       config.CH, config.R, config.C))
 
         idx = 0
-        for i, task in enumerate(minibatch):
+        for _, task in enumerate(minibatch):
             for memory in task["memories"]:
                 results_tensor[idx] = memory["result"]
                 policies_tensor[idx] = memory["policy"]
@@ -426,13 +427,13 @@ class MetaQP:
 
         return Q_loss.data.numpy()[0]
 
-    def train_P(self, minibatch, iter, iterations):
+    def train_P(self, minibatch):
         self.Q.train()
         self.P.train()
         self.p_optim.zero_grad()
         self.q_optim.zero_grad()
 
-        lr = self.p_clr.get_rate(epoch=iter, num_epoches=iterations)
+        lr = self.p_clr.get_rate()
         model_utils.adjust_learning_rate(self.q_optim, lr)
         # print("P lr: {}".format(lr))    
 
@@ -492,15 +493,13 @@ class MetaQP:
             return
         num_batches = config.TRAINING_BATCH_SIZE//config.N_WAY
 
-        iterations = epochs*training_loops
-
-        idx = 0
-        for i in range(training_loops):
+        for _ in range(training_loops):
             minibatch = sample(self.memories, min(num_batches, len(self.memories)))
 
-            for e in range(epochs):
-                self.history["Q"].extend([self.train_Q(minibatch, idx, iterations)])
-                self.history["P"].extend([self.train_P(minibatch, idx, iterations)])
+            for _ in range(epochs):
+                for _ in range(config.Q_UPDATES_PER):
+                    self.history["Q"].extend([self.train_Q(minibatch)])
+                self.history["P"].extend([self.train_P(minibatch)])
 
             print("Q_loss: {}".format(self.history["Q"][-1]), 
             "P_loss: {}".format(self.history["P"][-1][0]))
@@ -520,8 +519,7 @@ class MetaQP:
         minibatches = [sample(self.memories, min(num_batches, len(self.memories))) for _ 
          in range(config.TRAINING_LOOPS)]
 
-        step_size = config.TRAINING_LOOPS*config.EPOCHS*4 #*2
-        iterations = config.TRAINING_LOOPS*config.EPOCHS
+        step_size = config.TRAINING_LOOPS*config.EPOCHS*8 #*2
 
         multiplier = 2
 
@@ -535,36 +533,30 @@ class MetaQP:
                 self.Q = model_utils.load_temp(name)
                 self.q_optim = model_utils.setup_Q_optim(self.Q)
                 self.Q.train()
-                self.q_clr = CyclicLR(base_lr = lr/4, max_lr=lr, step=step_size) 
+                self.q_clr = CyclicLR(base_lr = lr/8, max_lr=lr, step=step_size*config.Q_UPDATES_PER) 
 
-                idx = 0
                 for i in range(config.TRAINING_LOOPS):
                     minibatch = minibatches[i]
 
                     for _ in range(config.EPOCHS):
-                        summed_loss += self.train_Q(minibatch, iter = idx, 
-                            iterations=iterations)
-                        idx += 1
+                        summed_loss += self.train_Q(minibatch)
                          
             elif name is "P":
                 self.P = model_utils.load_temp(name)
                 self.p_optim = model_utils.setup_P_optim(self.P)
                 self.P.train()
-                self.p_clr = CyclicLR(base_lr = lr/4, max_lr=lr, step=step_size) 
+                self.p_clr = CyclicLR(base_lr = lr/8, max_lr=lr, step=step_size) 
                 
-                idx = 0
                 for i in range(config.TRAINING_LOOPS):
                     minibatch = minibatches[i]
 
-                    for e in range(config.EPOCHS):
-                        summed_loss += self.train_P(minibatch, iter = idx, 
-                        iterations=iterations)
+                    for _ in range(config.EPOCHS):
+                        summed_loss += self.train_P(minibatch)
             else:
                 raise "Model name is wrong"
 
             lr *= multiplier
             loss = summed_loss/(config.TRAINING_LOOPS*config.EPOCHS)
-
         # max_lr = last_lr
         # loss = 1e8
         # last_loss = 1e9
@@ -611,12 +603,12 @@ class MetaQP:
 
         # min_lr = last_lr
         max_lr = last_lr
-        min_lr = last_lr/4
+        min_lr = last_lr/8
         if name is "Q":
             self.Q = model_utils.load_temp(name)
             self.q_optim = model_utils.setup_Q_optim(self.Q)
             self.q_clr = CyclicLR(base_lr = min_lr, max_lr=max_lr, 
-                step=step_size)
+                step=step_size*config.Q_UPDATES_PER)
         else:
             self.P = model_utils.load_temp(name)
             self.p_optim = model_utils.setup_P_optim(self.P)
@@ -627,4 +619,37 @@ class MetaQP:
         if len(self.memories) < config.MIN_TASK_MEMORIES:
             return
         self.find_lr(self.Q, self.q_optim, "Q", starting_max_lr=.048)
-        self.find_lr(self.P, self.p_optim, "P", starting_max_lr=.0005)
+        self.find_lr(self.P, self.p_optim, "P", starting_max_lr=.002)
+
+
+
+    def meta_sgd(self):
+        task_distribution = self.memories #p(T)
+        #learning rate stored in CLR
+
+        meta_net = MetaSGD(theta, alpha)
+
+        for _ in range(config.TRAINING_LOOPS):
+            #so let me see 
+            #train(T_i) represents the training set for a task t_i
+            #so in effect we are taking a task, i.e. one memory, and splitting into a
+            #train and test, so basically we 
+
+            #so basically get a batch
+            #for each memory in the batch take out 20% of the examples and set them aside to be
+            #a test batch.
+
+            #we update the net with the train batch
+            #and we test the net on the test batch
+            #we use a learned tanh gating function from the neural net
+            #which will control the direction and magnitude of the gradient update
+            #one for each example in the index I would assume
+            #so if we have a batch size of 100 we would learn 100 tanh's which will
+            #choose how to update.... hmmm
+            #Idk I need to see how they do it.
+
+
+            #
+            train_loss = meta_net()
+
+        return theta, alpha

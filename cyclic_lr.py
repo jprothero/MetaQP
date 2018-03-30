@@ -50,7 +50,7 @@ class CyclicLR():
         else:
             return self.base_lr + (self.max_lr-self.base_lr)*np.maximum(0, (1-x))*self.scale_fn(self.clr_iterations)
 
-    def get_rate(self, epoch=None, num_epoches=None):
+    def get_rate(self):
 
         self.trn_iterations += 1
         self.clr_iterations += 1
