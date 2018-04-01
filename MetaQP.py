@@ -5,7 +5,7 @@ import torch
 from torch import optim
 from torch.autograd import Variable
 import torch.nn.functional as F
-from copy import copy
+from copy import copy, deepcopy
 from random import shuffle, sample
 import numpy as np
 from IPython.core.debugger import set_trace
@@ -249,21 +249,90 @@ class MetaQP:
         if bests_turn == 1:
             Q = self.best_Q
             P = self.best_P
+            P_optim = model_utils.setup_P_optim(P)
         else:
             Q = self.Q
             P = self.P
 
-        policies = P(minibatch_variable, percent_random=1.0)
+        #So let me think, I need
+        #So let me think what I want
+        #I want the optimal policy under the Q
+        #i.e. I want to do training with the policy until it is basically optimal, and I dont care if it overfits
+        #We can have a separate training for the policy, i.e. we can regress it towards the found optimal policies, or we can do a single update or something
+        #to avoid underfitting. so basically, make a copy of the policy net, train it for lets say 10 iterations
+        #use that new policy as the "improved" policy. save it for later to match the policy net towards that training
+        #mix in one policy to be dirichlet noise so that we have some randomness and in theory can see all states and policies
+
+        torch.save(P.state_dict(), "temp")
+
+        optimal_value_tensor = np.ones(
+            (config.EPISODE_BATCH_SIZE//config.N_WAY, 1))
+
+        optimal_value_target = self.wrap_to_variable(optimal_value_tensor)  
+
+        #What do I need for this
+        #I need a variety of policies
+        #for example P when Q = 1, P when Q = -1, and a linspace inbetween
+        #and probably one dirichlet noise policy mixed in
+        #so lets say we have those 6 policies, when N_WAY=5
+        #We want to get an estimate of how good those policies are
+        #so basically we want to do one playout of those policies under the current "optimal" policy
+        #In order to do the linspace idea we would need to have the policy not just learn the optimal policy
+        #but rather learn the policy associated with a certain value
+        #so it learns how to reproduce the various policies.
+        #one issue with it is that until we get a good policy function -1 and 1 might be very similar
+        #and we won't get a good variety
+        #perhap we can just keep it simple and do one random policy and one "optimal" policy
+        #so we will in thoery be able to see everything
+        #and then maybe the N_WAY is how good the estimate would be, i.e. how results we would get
+        #so basically the current system, but we add one dirichlet noise policy
+        #and 
+
+        #so yeah basically have N_WAY be the number of estimates we get the value of the state
+        #the alternative is we can set N_WAY=1, and add a random policy estimate
+        #because it is a bit redundant to get multiple samples, maybe not idk.
+
+        #what is the alternative with training to convergence for the current Q and state
+        #it in theory will produce a strong state which we can regress the policy net towards
+        #or we can even put the training for the policy net in here, although it is not recommended
+
+        #How would that work
+        #basically we would get a set of strong policies for each of the states
+        #Under this we could use N_WAY to get multiple estimates of the value for each policy/state
+        #or we can do N_WAY=1 and treat each idx in the batch as it's own thing
+
+        #we need to mix in at least one dirichlet random policy,
+        #so for example maybe the strongest play results 
+
+        #What do we need. We need to create a strong Q function which gets a fairly accurate Q policy function
+        #Doing a 5_way policy evaluation will be more accurate, but it may overfit and be redundant
+        
+        #So basically we overfit all of the current states and get the strongest current policy, then we evaluate half those and half random dirichlet policies
+        #Only the current strongest policy will count towards the final
+
+        #So of course the issue with this is that at the end of the day we need to have the policy functin which will do the intermediate action choices to be good so we arent getting
+        #a super noisy estimate. To do that we can either save these "optimal" P's and use them, or we could train the P for more training loops
+
+        #Just having the policy learn separately is basically what I'm doing now so it doesn't make a ton of sense.
+        for _ in range(config.NUM_SELF_PLAY_UPDATES):
+            P.train()
+            P.zero_grad()
+
+            policies = P(minibatch_variable)
+            qs = Q(minibatch_variable, policies)
+
+            policy_loss = F.mse_loss(qs, optimal_value_target)
+
+            policy_loss.backward()
+
+            P_optim.step()
+
+        P.load_state_dict(torch.load("temp"))
+        P.eval()  
 
         policies = policies.detach().data.numpy()
 
         corrected_policies = self.correct_policies(policies, minibatch)
-
-        policies_input = self.wrap_to_variable(corrected_policies)
-
-        qs = Q(minibatch_variable, policies_input)
-
-        qs = qs.detach().data.numpy()
 
         idx = 0
         for task_idx in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
@@ -275,35 +344,13 @@ class MetaQP:
                     tasks[task_idx]["memories"].extend([None])
                 idx += 1
 
-        scaled_qs = (qs + 1) / 2
-        weighted_policies = corrected_policies * scaled_qs
-
-        idx = 0
-        for task_idx in range(config.EPISODE_BATCH_SIZE // config.N_WAY):
-            summed_policy = 0
-            for _ in range(config.N_WAY):
-                summed_policy += weighted_policies[idx]
-                idx += 1
-            idx -= config.N_WAY
-
-            improved_policy = self.correct_policy(
-                summed_policy, minibatch[idx], mask=True)
-
-            if tasks[task_idx] is not None:
-                tasks[task_idx]["improved_policy"] = improved_policy
-            for _ in range(config.N_WAY):
-                weighted_policies[idx] = improved_policy
-                idx += 1
-
         is_done = deepcopy(episode_is_done)
         num_done = episode_num_done
-
-        improved_policies = weighted_policies
 
         next_minibatch, tasks, \
             episode_num_done, episode_is_done, \
             results, bests_turn, non_done_view = self.transition_and_evaluate_minibatch(minibatch=np.array(minibatch),
-                                                                         policies=improved_policies,
+                                                                         policies=corrected_policies,
                                                                          tasks=tasks,
                                                                          num_done=episode_num_done,
                                                                          is_done=episode_is_done,
@@ -455,7 +502,7 @@ class MetaQP:
             config.TRAINING_BATCH_SIZE//config.N_WAY, config.R * config.C))
 
         optimal_value_tensor = np.ones(
-            (config.TRAINING_BATCH_SIZE//config.N_WAY, 1))
+            (config.TRAINING_BATCH_SIZE//config.N_WAY, 1)) 
 
         state_input = self.wrap_to_variable(batch_task_tensor) 
         improved_policies_target = self.wrap_to_variable(improved_policies_tensor)   
@@ -496,9 +543,10 @@ class MetaQP:
         for _ in range(training_loops):
             minibatch = sample(self.memories, min(num_batches, len(self.memories)))
 
-            for _ in range(epochs):
-                for _ in range(config.Q_UPDATES_PER):
-                    self.history["Q"].extend([self.train_Q(minibatch)])
+            for _ in range(config.Q_EPOCHS):
+                self.history["Q"].extend([self.train_Q(minibatch)])
+            
+            for _ in range(config.P_EPOCHS):
                 self.history["P"].extend([self.train_P(minibatch)])
 
             print("Q_loss: {}".format(self.history["Q"][-1]), 
