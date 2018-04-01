@@ -54,7 +54,7 @@ class StateModule(nn.Module):
 
 class QP(nn.Module):
     def __init__(self):
-        super(QP, self).__init__()
+        super(QP, self).__init__()        
         self.StateModule = StateModule()
         self.Q = QModule()
         self.P = PolicyModule()
@@ -64,21 +64,10 @@ class QP(nn.Module):
 
         if policy is None:
             policy = self.P(state_out, percent_random)
+
         policy_view = policy.view(state.size()[0], 1, config.R, config.C)
-        #state_out = state_out.permute(1, 0, 2, 3)
-
         q_input = torch.cat((state_out, policy_view), dim=1)
-
-        #q_input = q_input.permute(1, 0, 2, 3)
-
         Q = self.Q(q_input)
-
-        # might need this view
-        # policy_view = policy.view(1, config.BATCH_SIZE, config.R, config.C)
-        # Q_input = torch.cat((x.view(self.num_filters, config.BATCH_SIZE, config.R, config.C),
-        #     policy_view), axis=0)
-        # Q = self.Q(Q_input.view(config.BATCH_SIZE, -1))
-
         return Q, policy
 
 class P(nn.Module):

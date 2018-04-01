@@ -1,7 +1,7 @@
 import torch.optim as optim
 import torch
 
-from models import Q, P
+from models import Q, P, QP
 import config
 
 from IPython.core.debugger import set_trace
@@ -25,6 +25,14 @@ def setup_P_optim(P):
     
     return p_optim
 
+def setup_QP_optim(QP):
+    qp_optim = optim.SGD(QP.parameters(),
+        lr=config.LR,
+        momentum=config.MOMENTUM,
+        weight_decay=config.WEIGHT_DECAY)
+    
+    return qp_optim
+
 def load_Q():
     try:
         return torch.load('checkpoints/models/Q_best.t7')
@@ -39,6 +47,14 @@ def load_P():
         print('Initialize new Network Weights for P')
         return P()
 
+
+def load_QP():
+    try:
+        return torch.load('checkpoints/models/QP_best.t7')
+    except:
+        print('Initialize new Network Weights for QP')
+        return QP()
+
 def save_Q(Q):
     print("Saving best Q")
     torch.save(Q, "checkpoints/models/Q_best.t7")
@@ -46,6 +62,10 @@ def save_Q(Q):
 def save_P(P):
     print("Saving best P")
     torch.save(P, "checkpoints/models/P_best.t7")
+
+def save_QP(QP):
+    print("Saving best QP")
+    torch.save(Q, "checkpoints/models/QP_best.t7")
 
 def save_temp(model, name):
     os.makedirs("temp", exist_ok=True)
