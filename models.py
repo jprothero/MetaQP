@@ -34,9 +34,19 @@ class StateModule(nn.Module):
         self.state_res3 = make_layer(config.NUM_STATE_RES_FILTERS,
                                      config.NUM_STATE_RES_FILTERS,
                                      ResBlock)
-        # self.state_res4 = make_layer(config.NUM_STATE_RES_FILTERS,
-        #                              config.NUM_STATE_RES_FILTERS,
-        #                              ResBlock)
+        self.state_res4 = make_layer(config.NUM_STATE_RES_FILTERS,
+                                     config.NUM_STATE_RES_FILTERS,
+                                     ResBlock)
+        self.state_res5 = make_layer(config.NUM_STATE_RES_FILTERS,
+                                     config.NUM_STATE_RES_FILTERS,
+                                     ResBlock)
+        self.state_res6 = make_layer(config.NUM_STATE_RES_FILTERS,
+                                     config.NUM_STATE_RES_FILTERS,
+                                     ResBlock)
+        self.state_res7 = make_layer(config.NUM_STATE_RES_FILTERS,
+                                     config.NUM_STATE_RES_FILTERS,
+                                     ResBlock)
+
         self.state_res_out = make_layer(config.NUM_STATE_RES_FILTERS,
                                         config.NUM_STATE_RES_FILTERS,
                                         ResBlock)
@@ -46,7 +56,10 @@ class StateModule(nn.Module):
         s = self.state_res1(s)
         s = self.state_res2(s)
         s = self.state_res3(s)
-        # s = self.state_res4(s)
+        s = self.state_res4(s)
+        # s = self.state_res5(s)
+        # s = self.state_res6(s)
+        # s = self.state_res7(s)
 
         state_out = self.state_res_out(s)
 
@@ -112,9 +125,12 @@ class QModule(nn.Module):
         self.q_res2 = make_layer(config.NUM_Q_RES_FILTERS,
                                  config.NUM_Q_RES_FILTERS,
                                  ResBlock)
-        # self.q_res3 = make_layer(config.NUM_Q_RES_FILTERS,
-        #                          config.NUM_Q_RES_FILTERS,
-        #                          ResBlock)
+        self.q_res3 = make_layer(config.NUM_Q_RES_FILTERS,
+                                 config.NUM_Q_RES_FILTERS,
+                                 ResBlock)
+        self.q_res4 = make_layer(config.NUM_Q_RES_FILTERS,
+            config.NUM_Q_RES_FILTERS,
+            ResBlock)
         self.q_res_out = make_layer(config.NUM_Q_RES_FILTERS,
                                     config.NUM_Q_RES_FILTERS,
                                     QHead,
@@ -125,6 +141,7 @@ class QModule(nn.Module):
         q = self.q_res1(q)
         q = self.q_res2(q)
         # q = self.q_res3(q)
+        # q = self.q_res4(q)
         Q = self.q_res_out(q)
 
         return Q
@@ -151,15 +168,15 @@ class PolicyModule(nn.Module):
             config.NUM_P_RES_FILTERS,
             ResBlock)
 
-        # self.p_res4 = make_layer(
-        #     config.NUM_P_RES_FILTERS,
-        #     config.NUM_P_RES_FILTERS,
-        #     ResBlock)
+        self.p_res4 = make_layer(
+            config.NUM_P_RES_FILTERS,
+            config.NUM_P_RES_FILTERS,
+            ResBlock)
 
-        # self.p_res5 = make_layer(
-        #     config.NUM_P_RES_FILTERS,
-        #     config.NUM_P_RES_FILTERS,
-        #     ResBlock)
+        self.p_res5 = make_layer(
+            config.NUM_P_RES_FILTERS,
+            config.NUM_P_RES_FILTERS,
+            ResBlock)
 
         self.p_res_out = make_layer(
             config.NUM_P_RES_FILTERS,

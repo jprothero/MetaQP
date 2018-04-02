@@ -25,8 +25,14 @@ def setup_P_optim(P):
     
     return p_optim
 
-def setup_QP_optim(QP):
-    qp_optim = optim.SGD(QP.parameters(),
+def setup_QP_optim(qp):
+    state_params = qp.StateModule.parameters()
+    q_params = qp.Q.parameters()
+    p_params = qp.P.parameters()
+
+    qp_optim = optim.SGD([
+            {"params": state_params}, {"params": p_params}, {"params": q_params}
+        ],
         lr=config.LR,
         momentum=config.MOMENTUM,
         weight_decay=config.WEIGHT_DECAY)

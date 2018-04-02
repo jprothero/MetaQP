@@ -41,9 +41,9 @@ class MetaQP:
         self.transition_and_evaluate = transition_and_evaluate
 
         if not best:
-            max_lr=.15
-            step=5
-            div=4
+            max_lr=.1
+            step=config.TRAINING_LOOPS/2
+            div=10
             self.qp_clr = CyclicLR(base_lr=max_lr/div, max_lr=max_lr, step=step)
 
             self.qp_optim = model_utils.setup_QP_optim(self.QP)
@@ -51,8 +51,7 @@ class MetaQP:
             self.best_QP = model_utils.load_QP()
 
             if self.cuda:
-                self.best_Q = self.best_Q.cuda()
-                self.best_P = self.best_P.cuda()
+                self.best_QP = self.best_QP.cuda()
 
             self.history = utils.load_history()
             self.memories = utils.load_memories()
@@ -241,15 +240,34 @@ class MetaQP:
         else:
             QP = self.QP
 
-        policies = P(minibatch_variable, percent_random=.8)
+        if len(self.memories) > config.MIN_TASK_MEMORIES:        
+            torch.save(QP.Q.state_dict(), "checkpoints/temp_q")
+            torch.save(QP.StateModule.state_dict(), "checkpoints/temp_s")   
+            torch.save(QP.P.state_dict(), "checkpoints/temp_p")  
 
+            QP.train()
+
+            for _ in range(config.SELF_PLAY_POLICY_LOOPS):
+                print("Self play policy loss {}".format(self.self_play_train_P(QP, minibatch_variable)))
+
+            QP.eval()   
+
+            _, policies = self.QP(minibatch_variable, percent_random=.1)
+            
+            QP.Q.load_state_dict(torch.load("checkpoints/temp_q"))
+            QP.StateModule.load_state_dict(torch.load("checkpoints/temp_s"))
+            QP.P.load_state_dict(torch.load("checkpoints/temp_p"))     
+
+        else:
+            _, policies = QP(minibatch_variable, percent_random=.1)            
+        
         policies = policies.detach().data.numpy()
 
         corrected_policies = self.correct_policies(policies, minibatch)
 
         policies_input = self.wrap_to_variable(corrected_policies)
 
-        qs = Q(minibatch_variable, policies_input)
+        qs, _ = QP(minibatch_variable, policies_input)
 
         qs = qs.detach().data.numpy()
 
@@ -417,7 +435,7 @@ class MetaQP:
 
         lr = self.qp_clr.get_rate()
         model_utils.adjust_learning_rate(self.qp_optim, lr)
-        print("P lr: {}".format(lr))    
+        # print("P lr: {}".format(lr))    
 
         batch_task_tensor = np.zeros((config.TRAINING_BATCH_SIZE,
                                       config.CH, config.R, config.C))
@@ -478,8 +496,50 @@ class MetaQP:
 
         policy_loss.backward()
 
+        torch.save(self.QP.Q.state_dict(), "checkpoints/temp_q")
+        torch.save(self.QP.StateModule.state_dict(), "checkpoints/temp_s")        
+
         self.qp_optim.step()
 
+        self.QP.Q.load_state_dict(torch.load("checkpoints/temp_q"))
+        self.QP.StateModule.load_state_dict(torch.load("checkpoints/temp_s"))
+        
+        return policy_loss.data.numpy()[0]
+
+    def self_play_train_P(self, QP, minibatch):
+        QP.train()
+        qp_optim = model_utils.setup_QP_optim(QP)
+        qp_optim.zero_grad()
+
+        policies_view = []
+        for i in range(config.EPISODE_BATCH_SIZE):
+            if i % config.N_WAY == 0:
+                policies_view.extend([i])
+
+        lr = self.qp_clr.get_rate()
+        model_utils.adjust_learning_rate(qp_optim, lr)
+
+        optimal_value_tensor = np.ones(
+            (config.EPISODE_BATCH_SIZE//config.N_WAY, 1))
+
+        optimal_value_target = self.wrap_to_variable(optimal_value_tensor)    
+
+        Qs, _ = QP(minibatch)
+
+        Qs_smaller = Qs[policies_view]
+
+        policy_loss = F.mse_loss(Qs_smaller, optimal_value_target)
+
+        policy_loss.backward()
+
+        torch.save(QP.Q.state_dict(), "checkpoints/temp_q_2")
+        torch.save(QP.StateModule.state_dict(), "checkpoints/temp_s_2")        
+
+        qp_optim.step()
+
+        QP.Q.load_state_dict(torch.load("checkpoints/temp_q_2"))
+        QP.StateModule.load_state_dict(torch.load("checkpoints/temp_s_2"))
+        
         return policy_loss.data.numpy()[0]
 
     def train(self,
@@ -490,24 +550,22 @@ class MetaQP:
             return
         num_batches = config.TRAINING_BATCH_SIZE//config.N_WAY
 
-        # for _ in range(training_loops):
-        #     minibatch = sample(self.memories, min(num_batches, len(self.memories)))
+        for _ in range(training_loops):
+            minibatch = sample(self.memories, min(num_batches, len(self.memories)))
 
-        #     for _ in range(epochs):
-        #         for _ in range(config.Q_UPDATES_PER):
-        #             self.history["Q"].extend([self.train_Q(minibatch)])
-        #         self.history["P"].extend([self.train_P(minibatch)])
-
-        #     print("Q_loss: {}".format(self.history["Q"][-1]), 
-        #     "P_loss: {}".format(self.history["P"][-1][0]))
-
-        minibatch = sample(self.memories, min(num_batches, len(self.memories)))
-        for _ in range(20):
             self.history["Q"].extend([self.train_Q(minibatch)])
-            print("Q_loss: {}".format(self.history["Q"][-1]))
-        for _ in range(20):
             self.history["P"].extend([self.train_P(minibatch)])
-            print("P_loss: {}".format(self.history["P"][-1]))
+
+            print("Q_loss: {}".format(self.history["Q"][-1]), 
+            "P_loss: {}".format(self.history["P"][-1]))
+
+        # minibatch = sample(self.memories, min(num_batches, len(self.memories)))
+        # for _ in range(10):
+        #     self.history["Q"].extend([self.train_Q(minibatch)])
+        #     print("Q_loss: {}".format(self.history["Q"][-1]))
+        # for _ in range(10):
+        #     self.history["P"].extend([self.train_P(minibatch)])
+        #     print("P_loss: {}".format(self.history["P"][-1]))
 
         # for _ in tqdm(range(config.Q_TRAINING_LOOPS)):
         #     minibatch = sample(self.memories, min(num_batches, len(self.memories)))
